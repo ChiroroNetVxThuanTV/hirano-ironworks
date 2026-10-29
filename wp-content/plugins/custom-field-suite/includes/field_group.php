@@ -1,5 +1,5 @@
 <?php
-
+#[\AllowDynamicProperties]
 class cfs_field_group
 {
     public $cache;

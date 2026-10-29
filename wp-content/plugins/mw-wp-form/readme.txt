@@ -1,16 +1,20 @@
 === MW WP Form ===
-Contributors: inc2734, ryu263, tomothumb, nanniku, mt8.biz, NExt-Season, kuck1u, mypacecreator, mh35
-Donate link: http://www.amazon.co.jp/registry/wishlist/39ANKRNSTNW40
+Contributors: inc2734, ryu263, tomothumb, nanniku, mt8.biz, NExt-Season, kuck1u, mypacecreator, mh35, grace-create, musus, wildworks, likr, yudai524, noldorinfo
+Original Donate link: https://www.amazon.co.jp/registry/wishlist/39ANKRNSTNW40
 Tags: plugin, form, confirm, preview, shortcode, mail, chart, graph, html, contact form, form creation, form creator, form manager, form builder, custom form
-Requires at least: 4.0
-Tested up to: 4.9.7
-Stable tag: 3.2.3
+Requires at least: 6.0
+Requires PHP: 8.0
+Tested up to: 6.4
+Stable tag: 5.1.8
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
-MW WP Form is shortcode base contact form plugin. This plugin have many feature. For example you can use many validation rules, contact data saving, and chart aggregation using saved contact data.
+MW WP Form is shortcode base contact form plugin. This plugin have many features. For example you can use many validation rules, inquiry data saving, and chart aggregation using saved inquiry data.
 
 == Description ==
+
+**This plugin currently has only the minimum required maintenance releases.**
+**Main maintainer has been handed over from @inc2734 to @websoudan.**
 
 MW WP Form can create mail form with a confirmation screen using shortcode.
 
@@ -18,25 +22,16 @@ MW WP Form can create mail form with a confirmation screen using shortcode.
 * Using confirmation page is possible.
 * The page changes by the same URL or individual URL are possible.
 * Many validation rules
-* Saving contact data is possible.
-* Displaying Chart using saved contact data is possible.
-
-MW WP Form はショートコードを使って確認画面付きのメールフォームを作成することができるプラグインです。
-
-* ショートコードを使用したフォーム生成
-* 確認画面が表示可能
-* 同一URL・個別URLでの画面変遷が可能
-* 豊富なバリデーションルール
-* 問い合わせデータを保存可能
-* 保存した問い合わせデータをグラフ可能
+* Saving inquiry data is possible.
+* Displaying Chart using saved inquiry data is possible.
 
 = Official =
 
-http://plugins.2inc.org/mw-wp-form/
+https://mw-wp-form.web-soudan.co.jp
 
 = GitHub =
 
-https://github.com/inc2734/mw-wp-form
+https://github.com/web-soudan/mw-wp-form
 
 = The following third-party resources =
 
@@ -45,17 +40,23 @@ Source: https://developers.google.com/chart/
 
 = Contributors =
 
-* [Takashi Kitajima](http://2inc.org) ( [inc2734](http://profiles.wordpress.org/inc2734) )
-* [Ryujiro Yamamoto](http://webcre-archive.com) ( [ryu263](http://profiles.wordpress.org/ryu263) )
-* [Tsujimoto Tomoyuki](http://kee-non.com) ( [tomothumb](http://profiles.wordpress.org/tomothumb) )
-* [Naoyuki Ohata] ( [nanniku](http://profiles.wordpress.org/nanniku) )
-* [Kazuto Takeshita](http://mt8.biz/) ( [moto hachi](https://profiles.wordpress.org/mt8biz/) )
-* [Atsushi Ando](http://www.next-season.net/) ( [NExt-Season](https://profiles.wordpress.org/next-season/) )
-* [Kazuki Tomiyasu](http://visualive.jp/) ( [KUCKLU](https://profiles.wordpress.org/kuck1u/) )
-* [Kei Nomura](http://mypacecreator.net/) ( [mypacecreator](https://profiles.wordpress.org/mypacecreator/) )
+* [Takashi Kitajima](https://2inc.org) ( [inc2734](https://profiles.wordpress.org/inc2734) )
+* [Ryujiro Yamamoto](https://webcre-archive.com) ( [ryu263](https://profiles.wordpress.org/ryu263) )
+* [Tsujimoto Tomoyuki](http://kee-non.com) ( [tomothumb](https://profiles.wordpress.org/tomothumb) )
+* [Naoyuki Ohata] ( [nanniku](https://profiles.wordpress.org/nanniku) )
+* [Kazuto Takeshita](https://mt8.biz/) ( [moto hachi](https://profiles.wordpress.org/mt8biz/) )
+* [Atsushi Ando](https://www.next-season.net/) ( [NExt-Season](https://profiles.wordpress.org/next-season/) )
+* [Kazuki Tomiyasu](https://visualive.jp/) ( [KUCKLU](https://profiles.wordpress.org/kuck1u/) )
+* [Kei Nomura](https://mypacecreator.net/) ( [mypacecreator](https://profiles.wordpress.org/mypacecreator/) )
 * [mh35](https://profiles.wordpress.org/mh35)
 * [Takashi Nojima](https://github.com/nojimage)
 * [herikutu](https://github.com/herikutu)
+* [tsucharoku](https://github.com/tsucharoku)
+* [Tetsuaki Hamano](https://github.com/t-hamano) ( [t-hamano](https://profiles.wordpress.org/wildworks/) )
+* [Susumu Seino](https://github.com/musus) ( [Susumu Seino](https://profiles.wordpress.org/musus/) )
+* [Yosuke Onoue](https://github.com/likr) ( [likr](https://profiles.wordpress.org/likr/) )
+* [Yudai Konishi](https://github.com/yudai524) ( [Yudai Konishi](https://profiles.wordpress.org/yudai524/) )
+* [takekoshi](https://github.com/noldorinfo) ( [takekoshi](https://profiles.wordpress.org/noldorinfo/) )
 
 == Installation ==
 
@@ -67,8 +68,8 @@ Source: https://developers.google.com/chart/
 
 Do you have questions or issues with MW WP Form? Use these support channels appropriately.
 
-1. [Official](http://plugins.2inc.org/mw-wp-form/)
-1. [Support Forum](http://wordpress.org/support/plugin/mw-wp-form)
+1. [Official](https://mw-wp-form.web-soudan.co.jp)
+1. [Support Forum](https://wordpress.org/support/plugin/mw-wp-form)
 
 == Screenshots ==
 
@@ -79,6 +80,164 @@ Do you have questions or issues with MW WP Form? Use these support channels appr
 5. Supports chart display of saved inquiry data.
 
 == Changelog ==
+
+= 5.1.8 =
+* Security Tighten access control on post reference handling via query string (re-release of 5.1.7, which was not delivered due to a missing Stable tag update)
+
+= 5.1.7 =
+* Security Tighten access control on post reference handling via query string
+
+= 5.1.6 =
+* Security Tighten output escaping on inquiry data list screen (column identifier). Thanks to Sai Praneeth Koti for reporting.
+
+= 5.1.5 =
+* Security Tighten output escaping on inquiry data list screen
+* Security Neutralize shortcode syntax in values rendered on the completion screen
+
+= 5.1.4 =
+* Security Tighten output escaping on inquiry data detail screen
+
+= 5.1.3 =
+* Security Tighten access control on post property reference handling
+* Added Cookie SameSite=Lax attribute to CSRF / session cookies
+* Added Admin notice for [mwform_file] / [mwform_image] shortcodes, which are scheduled for removal in 5.2
+* Fixed PHP 8.3 Deprecated warning on get_class() without arguments
+* Fixed Undefined variable warning in maxfilesize (image size) validation rule
+
+= 5.1.2 =
+* Security Fix insufficient file path validation in upload file handling
+
+= 5.1.1 =
+* Security Fix insufficient file path validation in upload file handling
+
+= 5.1.0 =
+* Security Use wp_kses_post to form content/complete message
+
+= 5.0.6 =
+* Fixed Fixed an error during uninstallation. ( later 5.0.0 )
+* Temporarily Removed PHP requirements
+
+= 5.0.5 =
+* Changed requirements to PHP 8.0, WordPress 6.0
+
+= 5.0.4 =
+* Fixed Delete only attachments.
+
+= 5.0.3 =
+* Remove plugin asset files.
+
+= 5.0.2 =
+* Fixed file upload security.
+* Fixed Unification of cookie key names.
+
+= 5.0.1 =
+* Main maintainer has been handed over from @inc2734 to @websoudan.
+
+= 5.0.0 =
+* Requires PHP 7.4.
+* Fixed a form access control vulnerability.
+* Enhanced file upload security.
+* Changed uploaded file name from "random number" to "{name attribute value}-{original file name}".
+* Update CSRF check.
+* Remove method: MW_WP_Form::get_temp_dir()
+* Remove method: MW_WP_Form::create_temp_dir()
+* Remove method: MW_WP_Form::do_empty_temp_dir()
+* Remove method: MW_WP_Form::remove_temp_dir()
+* Remove method: MWF_Functions::generate_uploaded_fileurl_from_filename()
+* Remove method: MWF_Functions::generate_uploaded_filepath_from_filename()
+
+= 4.4.5 =
+* Fixed a bug in WordPress 6.2 that the file name of a file sent from file fields or image fields and attached to it becomes "name".
+
+= 4.4.4 =
+* Fixed a bug that prevented some file and image fields from being uploaded.
+
+= 4.4.3 =
+* Fixed a directory traversal vulnerability. We strongly encourage you to update to it immediately.
+
+= 4.4.2 =
+* Fix infinite redirections.
+
+= 4.4.1 =
+* Fixed a bug that caused forms to be cached when Batcache was enabled.
+* Fix infinite redirections with asterisks.
+* Add audio/x-wav etc. as mimetype for wav.
+
+= 4.4.0 =
+* Add filter hook `mwform_form_start_attr_action`.
+* Add maxlength attribute to textarea field arguments.
+
+= 4.3.2 =
+* Fix fatal error on saved contact data page.
+
+= 4.3.1 =
+* Some fix for `mwform_settings_extend_fields`.
+* Some fix for `mwform_settings_extend_fields_mw-wp-form-xxx`.
+
+= 4.3.0 =
+* Add filter hook `mwform_template_render`.
+* Add filter hook `mwform_template_render_mw-wp-form-xxx`.
+* Add filter hook `mwform_settings_extend_fields`.
+* Add filter hook `mwform_settings_extend_fields_mw-wp-form-xxx`.
+* Fix monthpicker bug.
+* Add wp-env.
+
+= 4.2.0 =
+* Fixed a bug that memo is not saved.
+* The select element can be used in tag generator dialog box.
+* You can set original tag group in tag generator.
+* Add filter hook mwform_tag_generator_labels.
+
+= 4.1.2 =
+* Fixed a bug that tracking number was displayed +1 on the complete screen.
+
+= 4.1.1 =
+* Add admin_email_to column to CSV.
+
+= 4.1.0 =
+* Add filter hook mwform_csv_columns-mwf_xxx
+* Fixed the bug that "MW WP Form dosen't support" mwform_after_exec_shortcode "already." is output to the error log even though it is not hooked.
+* Changed to save destination admin email address in inquiry data.
+* Fixed a bug that notice occurs when changing the response status of inquiry data.
+
+= 4.0.6 =
+* Fixed a bug that line feed was not applied to the form that using the block editor.
+
+= 4.0.5 =
+* Add filter hook mwform_send_nocache_header.
+* Fix MWF_Functions::_return_deprecated_message() error.
+* Fix bug that mwform_value_mw-wp-form-xxx filter not applyed to radio and checkbox.
+* Fix bug that nocache_header not applyed.
+* Add the echo attribute to mwform_custom_mail_tag.
+
+= 4.0.4 =
+* PHP 5.3, 5.2.4 support
+
+= 4.0.3 =
+* Fix saved contact data list bug.
+* Fix nocache headers bug.
+
+= 4.0.2 =
+* Fixed a bug caused by erroneous use of set_error_handler()
+
+= 4.0.1 =
+* Fix bug that form layout broken when Gutenberg installed.
+
+= 4.0.0 =
+* Refactoring
+* Update redirect process.
+* Changed that admin and reply Mail settings are required.
+* Changed to be able to set the form besides $post and main template.
+* Each input fields can overwrite from themes.
+* Deprecated action hook `mwform_exec_shortcode`. Please use this instead `mwform_start_main_process`
+* The hook to `mwform_validation_rules` is no longer needed to add your own validation rule.
+* Deprecated `MW_WP_Form_Contact_Data_Setting::get_posts()`. Please use this instead `MW_WP_Form_Contact_Data_Setting::get_form_post_types()`
+* Added method MW_WP_Form_Data::get_saved_mail_id();
+* Added method MW_WP_Form_Data::set_saved_mail_id();
+* Deprecated `MW_WP_Form_Data::getInstance()`. Please use this instead `MW_WP_Form_Data::connect()`
+* Deprecated `MW_WP_Form_Form::remove_linefeed_space()`. Please use this instead `MW_WP_Form_Form::remove_newline_space()`
+* Deprecated `MW_WP_Form_Validation::check()`. Please use this instead `MW_WP_Form_Validation::is_valid()`
+* Deprecated `MW_WP_Form_Validation::single_check()`. Please use this instead `MW_WP_Form_Validation::is_valid_field()`
 
 = 3.2.3 =
 * Added   : Added filter hook mwform_response_statuses_mwf_xxx
@@ -445,7 +604,6 @@ Do you have questions or issues with MW WP Form? Use these support channels appr
 * Added   : X-Accel-Expires param in header.
 * Added   : Add CC setting in admin mail setting.
 * Added   : Add BCC setting in admin mail setting.
-* Added   : X-Accel-Expires param in header.
 * Changed : Data store has been changed to Transient API from PHP SESSION.
 * Changed : Nonce check system has been changed to WordPress nonce check system from original.
 * Changed : Accept space in katakana validation.

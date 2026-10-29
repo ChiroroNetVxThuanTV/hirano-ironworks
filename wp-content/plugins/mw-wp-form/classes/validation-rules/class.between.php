@@ -1,74 +1,77 @@
 <?php
 /**
- * Name       : MW WP Form Validation Rule Between
- * Description: 値の文字数が範囲内
- * Version    : 1.1.1
- * Author     : Takashi Kitajima
- * Author URI : http://2inc.org
- * Created    : July 21, 2014
- * Modified   : April 1, 2015
- * License    : GPLv2 or later
- * License URI: http://www.gnu.org/licenses/gpl-2.0.html
+ * @package mw-wp-form
+ * @author websoudan
+ * @license GPL-2.0+
+ */
+
+/**
+ * MW_WP_Form_Validation_Rule_Between
  */
 class MW_WP_Form_Validation_Rule_Between extends MW_WP_Form_Abstract_Validation_Rule {
 
 	/**
-	 * バリデーションルール名を指定
+	 * Validation rule name.
+	 *
 	 * @var string
 	 */
 	protected $name = 'between';
 
 	/**
-	 * バリデーションチェック
+	 * Validation process.
 	 *
-	 * @param string $key name属性
-	 * @param array $option
-	 * @return string エラーメッセージ
+	 * @param string $name    Validation name.
+	 * @param array  $options Validation options.
+	 * @return string
 	 */
-	public function rule( $key, array $options = array() ) {
-		$value = $this->Data->get( $key );
+	public function rule( $name, array $options = array() ) {
+		$value = $this->Data->get( $name );
 		$value = MWF_Functions::convert_eol( $value );
-		if ( !MWF_Functions::is_empty( $value ) ) {
-			$defaults = array(
-				'min'     => 0,
-				'max'     => 0,
-				'message' => __( 'The number of characters is invalid.', 'mw-wp-form' )
-			);
-			$options = array_merge( $defaults, $options );
-			$length = mb_strlen( $value, get_bloginfo( 'charset' ) );
-			if ( MWF_Functions::is_numeric( $options['min'] ) ) {
-				if ( MWF_Functions::is_numeric( $options['max'] ) ) {
-					if ( !( $options['min'] <= $length && $length <= $options['max'] ) ) {
-						return $options['message'];
-					}
-				} else {
-					if ( $options['min'] > $length ) {
-						return $options['message'];
-					}
-				}
-			} elseif ( MWF_Functions::is_numeric( $options['max'] ) ) {
-				if ( $options['max'] < $length ) {
+
+		if ( MWF_Functions::is_empty( $value ) ) {
+			return;
+		}
+
+		$defaults = array(
+			'min'     => 0,
+			'max'     => 0,
+			'message' => __( 'The number of characters is invalid.', 'mw-wp-form' ),
+		);
+		$options  = array_merge( $defaults, $options );
+		$length   = mb_strlen( $value, get_bloginfo( 'charset' ) );
+		if ( MWF_Functions::is_numeric( $options['min'] ) ) {
+			if ( MWF_Functions::is_numeric( $options['max'] ) ) {
+				if ( $options['min'] > $length || $length > $options['max'] ) {
 					return $options['message'];
 				}
+			}
+
+			if ( $options['min'] > $length ) {
+				return $options['message'];
+			}
+		} elseif ( MWF_Functions::is_numeric( $options['max'] ) ) {
+			if ( $options['max'] < $length ) {
+				return $options['message'];
 			}
 		}
 	}
 
 	/**
-	 * 設定パネルに追加
+	 * Add setting field to validation rule setting panel.
 	 *
-	 * @param numeric $key バリデーションルールセットの識別番号
-	 * @param array $value バリデーションルールセットの内容
+	 * @param numeric $key ID of validation rule.
+	 * @param array   $value Content of validation rule.
+	 * @return void
 	 */
 	public function admin( $key, $value ) {
 		$min = '';
 		$max = '';
-		if ( is_array( $value[$this->getName()] ) ) {
-			if ( isset( $value[$this->getName()]['min'] ) ) {
-				$min = $value[$this->getName()]['min'];
+		if ( is_array( $value[ $this->get_name() ] ) ) {
+			if ( isset( $value[ $this->get_name() ]['min'] ) ) {
+				$min = $value[ $this->get_name() ]['min'];
 			}
-			if ( isset( $value[$this->getName()]['max'] ) ) {
-				$max = $value[$this->getName()]['max'];
+			if ( isset( $value[ $this->get_name() ]['max'] ) ) {
+				$max = $value[ $this->get_name() ]['max'];
 			}
 		}
 		?>
@@ -76,9 +79,9 @@ class MW_WP_Form_Validation_Rule_Between extends MW_WP_Form_Abstract_Validation_
 			<tr>
 				<td><?php esc_html_e( 'The range of the number of characters', 'mw-wp-form' ); ?></td>
 				<td>
-					<input type="text" value="<?php echo esc_attr( $min ); ?>" size="3" name="<?php echo MWF_Config::NAME; ?>[validation][<?php echo $key; ?>][<?php echo esc_attr( $this->getName() ); ?>][min]" />
+					<input type="text" value="<?php echo esc_attr( $min ); ?>" size="3" name="<?php echo MWF_Config::NAME; ?>[validation][<?php echo $key; ?>][<?php echo esc_attr( $this->get_name() ); ?>][min]" />
 					〜
-					<input type="text" value="<?php echo esc_attr( $max ); ?>" size="3" name="<?php echo MWF_Config::NAME; ?>[validation][<?php echo $key; ?>][<?php echo esc_attr( $this->getName() ); ?>][max]" />
+					<input type="text" value="<?php echo esc_attr( $max ); ?>" size="3" name="<?php echo MWF_Config::NAME; ?>[validation][<?php echo $key; ?>][<?php echo esc_attr( $this->get_name() ); ?>][max]" />
 				</td>
 			</tr>
 		</table>

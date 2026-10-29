@@ -1,28 +1,28 @@
 <?php
 /**
- * Name       : MW WP Form Field Image
- * Description: 画像アップロードフィールドを出力
- * Version    : 1.6.0
- * Author     : Takashi Kitajima
- * Author URI : http://2inc.org
- * Created    : May 17, 2013
- * Modified   : November 14, 2015
- * License    : GPLv2 or later
- * License URI: http://www.gnu.org/licenses/gpl-2.0.html
+ * @package mw-wp-form
+ * @author websoudan
+ * @license GPL-2.0+
+ */
+
+/**
+ * MW_WP_Form_Field_Image
  */
 class MW_WP_Form_Field_Image extends MW_WP_Form_Abstract_Form_Field {
 
 	/**
-	 * $type
-	 * フォームタグの種類 input|select|button|input_button|error|other
+	 * Types of form type.
+	 * input|select|button|input_button|error|other.
+	 *
 	 * @var string
 	 */
 	public $type = 'input';
 
 	/**
-	 * set_names
-	 * shortcode_name、display_nameを定義。各子クラスで上書きする。
-	 * @return array shortcode_name, display_name
+	 * Set shortcode_name and display_name.
+	 * Overwrite required for each child class.
+	 *
+	 * @return array
 	 */
 	protected function set_names() {
 		return array(
@@ -32,69 +32,78 @@ class MW_WP_Form_Field_Image extends MW_WP_Form_Abstract_Form_Field {
 	}
 
 	/**
-	 * set_defaults
-	 * $this->defaultsを設定し返す
-	 * @return array defaults
+	 * Set default attributes.
+	 *
+	 * @return array
 	 */
 	protected function set_defaults() {
 		return array(
-			'name'  => '',
-			'id'    => null,
-			'class' => null,
+			'name'       => '',
+			'id'         => null,
+			'class'      => null,
 			'show_error' => 'true',
 		);
 	}
 
 	/**
-	 * input_page
-	 * 入力ページでのフォーム項目を返す
-	 * @return string HTML
+	 * Callback of add shortcode for input page.
+	 *
+	 * @return string
 	 */
 	protected function input_page() {
-		$_ret = $this->Form->file( $this->atts['name'], array(
-			'id'    => $this->atts['id'],
-			'class' => $this->atts['class'],
-		) );
+		$_ret  = $this->Form->file(
+			$this->atts['name'],
+			array(
+				'id'    => $this->atts['id'],
+				'class' => $this->atts['class'],
+			)
+		);
 		$value = $this->Data->get_raw( $this->atts['name'] );
 
 		$upload_file_keys = $this->Data->get_post_value_by_key( MWF_Config::UPLOAD_FILE_KEYS );
-		if ( !empty( $value ) && is_array( $upload_file_keys ) && in_array( $this->atts['name'], $upload_file_keys ) ) {
-			$filepath = MWF_Functions::fileurl_to_path( $value );
+		if (
+			! empty( $value )
+			&& is_array( $upload_file_keys )
+			&& in_array( $this->atts['name'], $upload_file_keys, true )
+		) {
+			$form_id  = MWF_Functions::get_form_id_from_form_key( $this->Data->get_form_key() );
+			$filepath = MW_WP_Form_Directory::generate_user_filepath( $form_id, $this->atts['name'], $value );
 			if ( file_exists( $filepath ) ) {
 				$_ret .= sprintf(
 					'<div class="%s_image">
-						<img src="%s" alt="" />
+						%s
 						%s
 					</div>',
 					esc_attr( MWF_Config::NAME ),
-					esc_attr( $value ),
+					esc_html( $value ),
 					$this->Form->hidden( $this->atts['name'], $value )
 				);
 			}
 		}
-		if ( $this->atts['show_error'] !== 'false' ) {
+		if ( 'false' !== $this->atts['show_error'] ) {
 			$_ret .= $this->get_error( $this->atts['name'] );
 		}
 		return $_ret;
 	}
 
 	/**
-	 * confirm_page
-	 * 確認ページでのフォーム項目を返す
-	 * @return string HTML
+	 * Callback of add shortcode for confirm page.
+	 *
+	 * @return string
 	 */
 	protected function confirm_page() {
 		$value = $this->Data->get_raw( $this->atts['name'] );
 		if ( $value ) {
-			$filepath = MWF_Functions::fileurl_to_path( $value );
+			$form_id  = MWF_Functions::get_form_id_from_form_key( $this->Data->get_form_key() );
+			$filepath = MW_WP_Form_Directory::generate_user_filepath( $form_id, $this->atts['name'], $value );
 			if ( file_exists( $filepath ) ) {
 				return sprintf(
 					'<div class="%s_image">
-						<img src="%s" alt="" />
+						%s
 						%s
 					</div>',
 					esc_attr( MWF_Config::NAME ),
-					esc_attr( $value ),
+					esc_html( $value ),
 					$this->Form->hidden( $this->atts['name'], $value )
 				);
 			}
@@ -102,8 +111,10 @@ class MW_WP_Form_Field_Image extends MW_WP_Form_Abstract_Form_Field {
 	}
 
 	/**
-	 * add_mwform_tag_generator
-	 * フォームタグジェネレーター
+	 * Display tag generator dialog.
+	 * Overwrite required for each child class.
+	 *
+	 * @param array $options Options.
 	 */
 	public function mwform_tag_generator_dialog( array $options = array() ) {
 		?>
@@ -123,7 +134,7 @@ class MW_WP_Form_Field_Image extends MW_WP_Form_Abstract_Form_Field {
 			<input type="text" name="class" value="<?php echo esc_attr( $class ); ?>" />
 		</p>
 		<p>
-			<strong><?php esc_html_e( 'Dsiplay error', 'mw-wp-form' ); ?></strong>
+			<strong><?php esc_html_e( 'Display error', 'mw-wp-form' ); ?></strong>
 			<?php $show_error = $this->get_value_for_generator( 'show_error', $options ); ?>
 			<label><input type="checkbox" name="show_error" value="false" <?php checked( 'false', $show_error ); ?> /> <?php esc_html_e( 'Don\'t display error.', 'mw-wp-form' ); ?></label>
 		</p>

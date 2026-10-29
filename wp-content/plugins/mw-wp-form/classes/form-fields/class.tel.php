@@ -1,28 +1,28 @@
 <?php
 /**
- * Name       : MW WP Form Field Tel
- * Description: 電話番号フィールドを出力
- * Version    : 1.6.0
- * Author     : Takashi Kitajima
- * Author URI : http://2inc.org
- * Created    : December 14, 2012
- * Modified   : November 14, 2015
- * License    : GPLv2 or later
- * License URI: http://www.gnu.org/licenses/gpl-2.0.html
+ * @package mw-wp-form
+ * @author websoudan
+ * @license GPL-2.0+
+ */
+
+/**
+ * MW_WP_Form_Field_Tel
  */
 class MW_WP_Form_Field_Tel extends MW_WP_Form_Abstract_Form_Field {
 
 	/**
-	 * $type
-	 * フォームタグの種類 input|select|button|input_button|error|other
+	 * Types of form type.
+	 * input|select|button|input_button|error|other.
+	 *
 	 * @var string
 	 */
 	public $type = 'input';
 
 	/**
-	 * set_names
-	 * shortcode_name、display_nameを定義。各子クラスで上書きする。
-	 * @return array shortcode_name, display_name
+	 * Set shortcode_name and display_name.
+	 * Overwrite required for each child class.
+	 *
+	 * @return array
 	 */
 	protected function set_names() {
 		return array(
@@ -32,24 +32,24 @@ class MW_WP_Form_Field_Tel extends MW_WP_Form_Abstract_Form_Field {
 	}
 
 	/**
-	 * set_defaults
-	 * $this->defaultsを設定し返す
-	 * @return array defaults
+	 * Set default attributes.
+	 *
+	 * @return array
 	 */
 	protected function set_defaults() {
 		return array(
-			'name'       => '',
-			'class'      => null,
-			'value'      => '',
-			'show_error' => 'true',
+			'name'                   => '',
+			'class'                  => null,
+			'value'                  => '',
+			'show_error'             => 'true',
 			'conv_half_alphanumeric' => 'true',
 		);
 	}
 
 	/**
-	 * input_page
-	 * 入力ページでのフォーム項目を返す
-	 * @return string HTML
+	 * Callback of add shortcode for input page.
+	 *
+	 * @return string
 	 */
 	protected function input_page() {
 		$value = $this->Data->get_raw( $this->atts['name'] );
@@ -60,38 +60,43 @@ class MW_WP_Form_Field_Tel extends MW_WP_Form_Abstract_Form_Field {
 			$value = $this->atts['value'];
 		}
 		$conv_half_alphanumeric = 'true';
-		if ( $this->atts['conv_half_alphanumeric'] !== 'true' ) {
+		if ( 'true' !== $this->atts['conv_half_alphanumeric'] ) {
 			$conv_half_alphanumeric = null;
 		}
 
-		$_ret = $this->Form->tel( $this->atts['name'], array(
-			'class' => $this->atts['class'],
-			'conv-half-alphanumeric' => $conv_half_alphanumeric,
-			'value' => $value,
-		) );
-		if ( $this->atts['show_error'] !== 'false' ) {
+		$_ret = $this->Form->tel(
+			$this->atts['name'],
+			array(
+				'class'                  => $this->atts['class'],
+				'conv-half-alphanumeric' => $conv_half_alphanumeric,
+				'value'                  => $value,
+			)
+		);
+		if ( 'false' !== $this->atts['show_error'] ) {
 			$_ret .= $this->get_error( $this->atts['name'] );
 		}
 		return $_ret;
 	}
 
 	/**
-	 * confirm_page
-	 * 確認ページでのフォーム項目を返す
-	 * @return string HTML
+	 * Callback of add shortcode for confirm page.
+	 *
+	 * @return string
 	 */
 	protected function confirm_page() {
 		$value     = $this->Data->get( $this->atts['name'] );
 		$separator = $this->Data->get_separator_value( $this->atts['name'] );
-		$_ret  = esc_html( $value );
-		$_ret .= $this->Form->hidden( $this->atts['name'] . '[data]', $value );
-		$_ret .= $this->Form->separator( $this->atts['name'], $separator );
+		$_ret      = esc_html( $value );
+		$_ret     .= $this->Form->hidden( $this->atts['name'] . '[data]', $value );
+		$_ret     .= $this->Form->separator( $this->atts['name'], $separator );
 		return $_ret;
 	}
 
 	/**
-	 * add_mwform_tag_generator
-	 * フォームタグジェネレーター
+	 * Display tag generator dialog.
+	 * Overwrite required for each child class.
+	 *
+	 * @param array $options Options.
 	 */
 	public function mwform_tag_generator_dialog( array $options = array() ) {
 		?>
@@ -106,7 +111,7 @@ class MW_WP_Form_Field_Tel extends MW_WP_Form_Abstract_Form_Field {
 			<input type="text" name="class" value="<?php echo esc_attr( $class ); ?>" />
 		</p>
 		<p>
-			<strong><?php esc_html_e( 'Dsiplay error', 'mw-wp-form' ); ?></strong>
+			<strong><?php esc_html_e( 'Display error', 'mw-wp-form' ); ?></strong>
 			<?php $show_error = $this->get_value_for_generator( 'show_error', $options ); ?>
 			<label><input type="checkbox" name="show_error" value="false" <?php checked( 'false', $show_error ); ?> /> <?php esc_html_e( 'Don\'t display error.', 'mw-wp-form' ); ?></label>
 		</p>
@@ -116,5 +121,22 @@ class MW_WP_Form_Field_Tel extends MW_WP_Form_Abstract_Form_Field {
 			<label><input type="checkbox" name="conv_half_alphanumeric" value="false" <?php checked( 'false', $conv_half_alphanumeric ); ?> /> <?php esc_html_e( 'Don\'t Convert.', 'mw-wp-form' ); ?></label>
 		</p>
 		<?php
+	}
+
+	/**
+	 * This form field is for Japanese environments only.
+	 *
+	 * @param array $form_fields Array of MW_WP_Form_Abstract_Form_Field.
+	 * @return array
+	 */
+	public function _mwform_form_fields( array $form_fields ) {
+		$form_fields = parent::_mwform_form_fields( $form_fields );
+
+		if ( 'ja' === get_locale() ) {
+			return $form_fields;
+		}
+
+		unset( $form_fields[ $this->get_shortcode_name() ] );
+		return $form_fields;
 	}
 }

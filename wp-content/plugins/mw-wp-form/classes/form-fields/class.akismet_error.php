@@ -1,28 +1,28 @@
 <?php
 /**
- * Name       : MW WP Form Field Akismet Error
- * Description: Akismetのエラーを出力
- * Version    : 1.4.0
- * Author     : Takashi Kitajima
- * Author URI : http://2inc.org
- * Created    : June 21, 2013
- * Modified   : January 2, 2015
- * License    : GPLv2 or later
- * License URI: http://www.gnu.org/licenses/gpl-2.0.html
+ * @package mw-wp-form
+ * @author websoudan
+ * @license GPL-2.0+
+ */
+
+/**
+ * MW_WP_Form_Field_Akismet_Error
  */
 class MW_WP_Form_Field_Akismet_Error extends MW_WP_Form_Abstract_Form_Field {
 
 	/**
-	 * $type
-	 * フォームタグの種類 input|select|button|input_button|error|other
+	 * Types of form type.
+	 * input|select|button|input_button|error|other.
+	 *
 	 * @var string
 	 */
 	public $type = 'error';
 
 	/**
-	 * set_names
-	 * shortcode_name、display_nameを定義。各子クラスで上書きする。
-	 * @return array shortcode_name, display_name
+	 * Set shortcode_name and display_name.
+	 * Overwrite required for each child class.
+	 *
+	 * @return array
 	 */
 	protected function set_names() {
 		return array(
@@ -32,18 +32,18 @@ class MW_WP_Form_Field_Akismet_Error extends MW_WP_Form_Abstract_Form_Field {
 	}
 
 	/**
-	 * set_defaults
-	 * $this->defaultsを設定し返す
-	 * @return array defaults
+	 * Set default attributes.
+	 *
+	 * @return array
 	 */
 	protected function set_defaults() {
 		return array();
 	}
 
 	/**
-	 * input_page
-	 * 入力ページでのフォーム項目を返す
-	 * @return string HTML
+	 * Callback of add shortcode for input page.
+	 *
+	 * @return string
 	 */
 	protected function input_page() {
 		$error = $this->get_error( MWF_Config::AKISMET );
@@ -56,9 +56,7 @@ class MW_WP_Form_Field_Akismet_Error extends MW_WP_Form_Abstract_Form_Field {
 	}
 
 	/**
-	 * confirm_page
-	 * 確認ページでのフォーム項目を返す
-	 * @return string HTML
+	 * Callback of add shortcode for confirm page.
 	 */
 	protected function confirm_page() {
 	}

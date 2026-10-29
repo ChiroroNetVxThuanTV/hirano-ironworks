@@ -1,28 +1,28 @@
 <?php
 /**
- * Name       : MW WP Form Field Custom Mail Tag
- * Description: mwform_custom_mail_tag_mw-wp-form-xxx で指定されたデータを出力
- * Version    : 1.0.0
- * Author     : Takashi Kitajima
- * Author URI : http://2inc.org
- * Created    : April 3, 2016
- * Modified   :
- * License    : GPLv2 or later
- * License URI: http://www.gnu.org/licenses/gpl-2.0.html
+ * @package mw-wp-form
+ * @author websoudan
+ * @license GPL-2.0+
+ */
+
+/**
+ * MW_WP_Form_Field_Custom_Mail_Tag
  */
 class MW_WP_Form_Field_Custom_Mail_Tag extends MW_WP_Form_Abstract_Form_Field {
 
 	/**
-	 * $type
-	 * フォームタグの種類 input|select|button|input_button|error|other
+	 * Types of form type.
+	 * input|select|button|input_button|error|other.
+	 *
 	 * @var string
 	 */
 	public $type = 'other';
 
 	/**
-	 * set_names
-	 * shortcode_name、display_nameを定義。各子クラスで上書きする。
-	 * @return array shortcode_name, display_name
+	 * Set shortcode_name and display_name.
+	 * Overwrite required for each child class.
+	 *
+	 * @return array
 	 */
 	protected function set_names() {
 		return array(
@@ -32,8 +32,8 @@ class MW_WP_Form_Field_Custom_Mail_Tag extends MW_WP_Form_Abstract_Form_Field {
 	}
 
 	/**
-	 * set_defaults
-	 * $this->defaultsを設定し返す
+	 * Set default attributes.
+	 *
 	 * @return array
 	 */
 	protected function set_defaults() {
@@ -41,43 +41,58 @@ class MW_WP_Form_Field_Custom_Mail_Tag extends MW_WP_Form_Abstract_Form_Field {
 			'name'  => '',
 			'id'    => null,
 			'class' => null,
+			'echo'  => 'true',
 		);
 	}
 
 	/**
-	 * input_page
-	 * 入力ページでのフォーム項目を返す
-	 * @return string html
+	 * Callback of add shortcode for input page.
+	 *
+	 * @return string
 	 */
 	protected function input_page() {
-		$_ret = $this->custom_mail_tag_field( $this->atts['name'], array(
-			'id'    => $this->atts['id'],
-			'class' => $this->atts['class'],
-		) );
+		$_ret = '';
+		if ( 'true' === $this->atts['echo'] ) {
+			$_ret .= $this->custom_mail_tag_field(
+				$this->atts['name'],
+				array(
+					'id'    => $this->atts['id'],
+					'class' => $this->atts['class'],
+				)
+			);
+		}
 		$_ret .= $this->Form->hidden( MWF_Config::CUSTOM_MAIL_TAG_KEYS . '[]', $this->atts['name'] );
-		if ( $this->atts['show_error'] !== 'false' ) {
+		if ( 'false' !== $this->atts['show_error'] ) {
 			$_ret .= $this->get_error( $this->atts['name'] );
 		}
 		return $_ret;
 	}
 
 	/**
-	 * confirm_page
-	 * 確認ページでのフォーム項目を返す
-	 * @return string HTML
+	 * Callback of add shortcode for confirm page.
+	 *
+	 * @return string
 	 */
 	protected function confirm_page() {
-		$_ret = $this->custom_mail_tag_field( $this->atts['name'], array(
-			'id'    => $this->atts['id'],
-			'class' => $this->atts['class'],
-		) );
+		$_ret = '';
+		if ( 'true' === $this->atts['echo'] ) {
+			$_ret .= $this->custom_mail_tag_field(
+				$this->atts['name'],
+				array(
+					'id'    => $this->atts['id'],
+					'class' => $this->atts['class'],
+				)
+			);
+		}
 		$_ret .= $this->Form->hidden( MWF_Config::CUSTOM_MAIL_TAG_KEYS . '[]', $this->atts['name'] );
 		return $_ret;
 	}
 
 	/**
-	 * add_mwform_tag_generator
-	 * フォームタグジェネレーター
+	 * Display tag generator dialog.
+	 * Overwrite required for each child class.
+	 *
+	 * @param array $options Options.
 	 */
 	public function mwform_tag_generator_dialog( array $options = array() ) {
 		?>
@@ -96,58 +111,37 @@ class MW_WP_Form_Field_Custom_Mail_Tag extends MW_WP_Form_Abstract_Form_Field {
 			<?php $class = $this->get_value_for_generator( 'class', $options ); ?>
 			<input type="text" name="class" value="<?php echo esc_attr( $class ); ?>" />
 		</p>
+		<p>
+			<strong><?php esc_html_e( 'Display', 'mw-wp-form' ); ?></strong>
+			<?php $echo = $this->get_value_for_generator( 'echo', $options ); ?>
+			<input type="checkbox" name="echo" value="false" <?php checked( 'false', $echo ); ?> /> <?php esc_html_e( 'Don\'t display.', 'mw-wp-form' ); ?>
+		</p>
 		<?php
 	}
 
 	/**
-	 * 任意のデータを表示する要素を生成
+	 * 任意のデータを表示する要素を生成.
 	 *
-	 * @param string $name name属性
-	 * @param array
-	 * @return string html
+	 * @param string $name    Field name.
+	 * @param array  $options Options.
+	 * @return string
 	 */
 	public function custom_mail_tag_field( $name, $options = array() ) {
 		$defaults = array(
 			'id'    => null,
 			'class' => null,
 		);
-		$options = array_merge( $defaults, $options );
-		$class   = $options['class'];
+		$options  = array_merge( $defaults, $options );
+		$class    = $options['class'];
 		unset( $options['class'] );
-		$Form = new MW_WP_Form_Form();
+		$Form       = new MW_WP_Form_Form();
 		$attributes = $Form->generate_attributes( $options );
 
 		return sprintf(
 			'<span class="mwform-custom-mail-tag-field %s" %s>%s</span>',
 			esc_attr( $class ),
 			$attributes,
-			esc_html( $this->apply_filters_mwform_custom_mail_tag( $this->form_key, '', $name ) )
+			esc_html( MW_WP_Form_Parser::apply_filters_mwform_custom_mail_tag( $this->form_key, '', $name ) )
 		);
-	}
-
-	/**
-	 * フィルターフック mwform_custom_mail_tag を実行
-	 *
-	 * @param string $form_key
-	 * @param string|null $value
-	 * @param string $name
-	 * @return string
-	 */
-	protected function apply_filters_mwform_custom_mail_tag( $form_key, $value, $name ) {
-		$value = apply_filters(
-			'mwform_custom_mail_tag',
-			$value,
-			$name,
-			null
-		);
-
-		$value = apply_filters(
-			'mwform_custom_mail_tag_' . $form_key,
-			$value,
-			$name,
-			null
-		);
-
-		return $value;
 	}
 }

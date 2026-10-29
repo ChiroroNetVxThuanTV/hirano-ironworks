@@ -1,28 +1,28 @@
 <?php
 /**
- * Name       : MW WP Form Field Number
- * Description: number フィールドを出力
- * Version    : 1.1.0
- * Author     : Takashi Kitajima
- * Author URI : http://2inc.org
- * Created    : July 21, 2015
- * Modified   : November 14, 2015
- * License    : GPLv2 or later
- * License URI: http://www.gnu.org/licenses/gpl-2.0.html
+ * @package mw-wp-form
+ * @author websoudan
+ * @license GPL-2.0+
+ */
+
+/**
+ * MW_WP_Form_Field_Number
  */
 class MW_WP_Form_Field_Number extends MW_WP_Form_Abstract_Form_Field {
 
 	/**
-	 * $type
-	 * フォームタグの種類 input|select|button|input_button|error|other
+	 * Types of form type.
+	 * input|select|button|input_button|error|other.
+	 *
 	 * @var string
 	 */
 	public $type = 'input';
 
 	/**
-	 * set_names
-	 * shortcode_name、display_nameを定義。各子クラスで上書きする。
-	 * @return array shortcode_name, display_name
+	 * Set shortcode_name and display_name.
+	 * Overwrite required for each child class.
+	 *
+	 * @return array
 	 */
 	protected function set_names() {
 		return array(
@@ -32,8 +32,8 @@ class MW_WP_Form_Field_Number extends MW_WP_Form_Abstract_Form_Field {
 	}
 
 	/**
-	 * set_defaults
-	 * $this->defaultsを設定し返す
+	 * Set default attributes.
+	 *
 	 * @return array
 	 */
 	protected function set_defaults() {
@@ -51,9 +51,9 @@ class MW_WP_Form_Field_Number extends MW_WP_Form_Abstract_Form_Field {
 	}
 
 	/**
-	 * input_page
-	 * 入力ページでのフォーム項目を返す
-	 * @return string html
+	 * Callback of add shortcode for input page.
+	 *
+	 * @return string
 	 */
 	protected function input_page() {
 		$value = $this->Data->get_raw( $this->atts['name'] );
@@ -61,25 +61,28 @@ class MW_WP_Form_Field_Number extends MW_WP_Form_Abstract_Form_Field {
 			$value = $this->atts['value'];
 		}
 
-		$_ret = $this->Form->number( $this->atts['name'], array(
-			'id'          => $this->atts['id'],
-			'class'       => $this->atts['class'],
-			'value'       => $value,
-			'min'         => $this->atts['min'],
-			'max'         => $this->atts['max'],
-			'step'        => $this->atts['step'],
-			'placeholder' => $this->atts['placeholder'],
-		) );
-		if ( $this->atts['show_error'] !== 'false' ) {
+		$_ret = $this->Form->number(
+			$this->atts['name'],
+			array(
+				'id'          => $this->atts['id'],
+				'class'       => $this->atts['class'],
+				'value'       => $value,
+				'min'         => $this->atts['min'],
+				'max'         => $this->atts['max'],
+				'step'        => $this->atts['step'],
+				'placeholder' => $this->atts['placeholder'],
+			)
+		);
+		if ( 'false' !== $this->atts['show_error'] ) {
 			$_ret .= $this->get_error( $this->atts['name'] );
 		}
 		return $_ret;
 	}
 
 	/**
-	 * confirm_page
-	 * 確認ページでのフォーム項目を返す
-	 * @return string HTML
+	 * Callback of add shortcode for confirm page.
+	 *
+	 * @return string
 	 */
 	protected function confirm_page() {
 		$value = $this->Data->get_raw( $this->atts['name'] );
@@ -89,8 +92,10 @@ class MW_WP_Form_Field_Number extends MW_WP_Form_Abstract_Form_Field {
 	}
 
 	/**
-	 * add_mwform_tag_generator
-	 * フォームタグジェネレーター
+	 * Display tag generator dialog.
+	 * Overwrite required for each child class.
+	 *
+	 * @param array $options Options.
 	 */
 	public function mwform_tag_generator_dialog( array $options = array() ) {
 		?>
@@ -130,7 +135,7 @@ class MW_WP_Form_Field_Number extends MW_WP_Form_Abstract_Form_Field {
 			<input type="text" name="placeholder" value="<?php echo esc_attr( $placeholder ); ?>" />
 		</p>
 		<p>
-			<strong><?php esc_html_e( 'Dsiplay error', 'mw-wp-form' ); ?></strong>
+			<strong><?php esc_html_e( 'Display error', 'mw-wp-form' ); ?></strong>
 			<?php $show_error = $this->get_value_for_generator( 'show_error', $options ); ?>
 			<label><input type="checkbox" name="show_error" value="false" <?php checked( 'false', $show_error ); ?> /> <?php esc_html_e( 'Don\'t display error.', 'mw-wp-form' ); ?></label>
 		</p>

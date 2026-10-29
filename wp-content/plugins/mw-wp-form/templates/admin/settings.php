@@ -1,3 +1,11 @@
+<?php
+/**
+ * @package mw-wp-form
+ * @author websoudan
+ * @license GPL-2.0+
+ */
+?>
+
 <div class="section">
 	<label>
 		<input

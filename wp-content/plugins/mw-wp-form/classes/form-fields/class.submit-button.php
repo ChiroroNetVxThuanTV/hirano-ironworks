@@ -1,28 +1,28 @@
 <?php
 /**
- * Name       : MW WP Form Field Submit Button
- * Description: 確認ボタンと送信ボタンを自動出力
- * Version    : 1.6.1
- * Author     : Takashi Kitajima
- * Author URI : http://2inc.org
- * Created    : December 14, 2012
- * Modified   : December 26, 2016
- * License    : GPLv2 or later
- * License URI: http://www.gnu.org/licenses/gpl-2.0.html
+ * @package mw-wp-form
+ * @author websoudan
+ * @license GPL-2.0+
+ */
+
+/**
+ * MW_WP_Form_Field_Submit_Button
  */
 class MW_WP_Form_Field_Submit_Button extends MW_WP_Form_Abstract_Form_Field {
 
 	/**
-	 * $type
-	 * フォームタグの種類 input|select|button|input_button|error|other
+	 * Types of form type.
+	 * input|select|button|input_button|error|other.
+	 *
 	 * @var string
 	 */
 	public $type = 'input_button';
 
 	/**
-	 * set_names
-	 * shortcode_name、display_nameを定義。各子クラスで上書きする。
-	 * @return array shortcode_name, display_name
+	 * Set shortcode_name and display_name.
+	 * Overwrite required for each child class.
+	 *
+	 * @return array
 	 */
 	protected function set_names() {
 		return array(
@@ -32,49 +32,63 @@ class MW_WP_Form_Field_Submit_Button extends MW_WP_Form_Abstract_Form_Field {
 	}
 
 	/**
-	 * set_defaults
-	 * $this->defaultsを設定し返す
-	 * @return array defaults
+	 * Set default attributes.
+	 *
+	 * @return array
 	 */
 	protected function set_defaults() {
 		return array(
-			'name'  => '',
-			'class' => null,
+			'name'          => '',
+			'class'         => null,
 			'confirm_value' => __( 'Confirm', 'mw-wp-form' ),
 			'submit_value'  => __( 'Send', 'mw-wp-form' ),
 		);
 	}
 
 	/**
-	 * input_page
-	 * 入力ページでのフォーム項目を返す
-	 * @return string HTML
+	 * Callback of add shortcode for input page.
+	 *
+	 * @return string
 	 */
 	protected function input_page() {
-		if ( !empty( $this->atts['confirm_value'] ) ) {
-			return $this->Form->submit( MWF_Config::CONFIRM_BUTTON, $this->atts['confirm_value'], array(
-				'class' => $this->atts['class'],
-			) );
+		if ( ! empty( $this->atts['confirm_value'] ) ) {
+			return $this->Form->submit(
+				MWF_Config::CONFIRM_BUTTON,
+				$this->atts['confirm_value'],
+				array(
+					'class' => $this->atts['class'],
+				)
+			);
 		}
-		return $this->Form->submit( $this->atts['name'], $this->atts['submit_value'], array(
-			'class' => $this->atts['class'],
-		) );
+		return $this->Form->submit(
+			$this->atts['name'],
+			$this->atts['submit_value'],
+			array(
+				'class' => $this->atts['class'],
+			)
+		);
 	}
 
 	/**
-	 * confirm_page
-	 * 確認ページでのフォーム項目を返す
-	 * @return string HTML
+	 * Callback of add shortcode for confirm page.
+	 *
+	 * @return string
 	 */
 	protected function confirm_page() {
-		return $this->Form->submit( $this->atts['name'], $this->atts['submit_value'], array(
-			'class' => $this->atts['class'],
-		) );
+		return $this->Form->submit(
+			$this->atts['name'],
+			$this->atts['submit_value'],
+			array(
+				'class' => $this->atts['class'],
+			)
+		);
 	}
 
 	/**
-	 * add_mwform_tag_generator
-	 * フォームタグジェネレーター
+	 * Display tag generator dialog.
+	 * Overwrite required for each child class.
+	 *
+	 * @param array $options Options.
 	 */
 	public function mwform_tag_generator_dialog( array $options = array() ) {
 		?>

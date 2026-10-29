@@ -1,3 +1,11 @@
+<?php
+/**
+ * @package mw-wp-form
+ * @author websoudan
+ * @license GPL-2.0+
+ */
+?>
+
 <div class="wrap">
 	<?php $post_id = preg_replace( '/^(.+_)(\d+)$/', '$2', $post_type ); ?>
 	<h2>
@@ -5,17 +13,20 @@
 		:
 		<?php echo esc_html( get_the_title( $post_id ) ); ?>
 	</h2>
-	<form method="post" action="options.php">
+	<form method="post" action="">
 		<?php
-		settings_fields( $option_group );
-		do_settings_sections( $option_group );
+		wp_nonce_field( MWF_Config::NAME . '-chart-action', MWF_Config::NAME . '-chart-nonce-field' );
 		?>
 		<div id="<?php echo esc_attr( MWF_Config::NAME . '_chart' ); ?>" class="postbox">
 			<div class="inside">
 				<b class="add-btn"><?php esc_html_e( 'Add Chart', 'mw-wp-form' ); ?></b>
 				<div class="repeatable-boxes">
-					<?php foreach ( $postdata as $key => $value ) :  ?>
-					<div class="repeatable-box" <?php if ( $key === 0 ) : ?>style="display:none"<?php endif; ?>>
+					<?php foreach ( $postdata as $key => $value ) : ?>
+					<div class="repeatable-box"
+						<?php
+						if ( 0 === $key ) :
+							?>
+						style="display:none"<?php endif; ?>>
 						<div class="sortable-icon-handle"></div>
 						<div class="remove-btn"><b>×</b></div>
 						<div class="open-btn"><span><?php echo esc_html( $value['target'] ); ?></span><b>▼</b></div>
@@ -60,8 +71,10 @@
 
 	<?php
 	foreach ( $postdata as $postdata_key => $chart ) {
-		if ( !isset( $custom_keys[$chart['target']] ) ) {
-			unset( $postdata[$postdata_key] );
+		if ( ! isset( $custom_keys[ $chart['target'] ] ) ) {
+			// phpcs:disable VariableAnalysis.CodeAnalysis.VariableAnalysis.UndefinedUnsetVariable
+			unset( $postdata[ $postdata_key ] );
+			// phpcs:enable
 			continue;
 		}
 		printf(
@@ -76,47 +89,47 @@
 
 	$chart_data = array();
 	foreach ( $postdata as $postdata_key => $chart ) {
-		$data = array();
+		$data     = array();
 		$raw_data = array();
-		foreach ( $custom_keys[$chart['target']] as $item => $values ) {
+		foreach ( $custom_keys[ $chart['target'] ] as $item => $values ) {
 			if ( $chart['separator'] && strstr( $item, $chart['separator'] ) ) {
-				$item = explode( $chart['separator'] , $item );
+				$item = explode( $chart['separator'], $item );
 			}
 			if ( is_array( $item ) ) {
 				foreach ( $item as $_item ) {
-					if ( $_item === '' ) {
+					if ( '' === $_item ) {
 						$_item = '(Empty)';
 					}
-					if ( empty( $raw_data[$_item] ) ) {
-						$raw_data[$_item] = count( $values );
+					if ( empty( $raw_data[ $_item ] ) ) {
+						$raw_data[ $_item ] = count( $values );
 					} else {
-						$raw_data[$_item] += count( $values );
+						$raw_data[ $_item ] += count( $values );
 					}
 				}
 			} else {
-				if ( $item === '' ) {
+				if ( '' === $item ) {
 					$item = '(Empty)';
 				}
-				if ( empty( $raw_data[$item] ) ) {
-					$raw_data[$item] = count( $values );
+				if ( empty( $raw_data[ $item ] ) ) {
+					$raw_data[ $item ] = count( $values );
 				} else {
-					$raw_data[$item] += count( $values );
+					$raw_data[ $item ] += count( $values );
 				}
 			}
 		}
 		$data[] = array( '', '' );
 		foreach ( $raw_data as $raw_data_key => $raw_data_value ) {
-			if ( $chart['chart'] === 'bar' ) {
+			if ( 'bar' === $chart['chart'] ) {
 				$value = $raw_data_value / count( $form_posts );
 			} else {
 				$value = $raw_data_value;
 			}
 			$data[] = array(
-				( string ) $raw_data_key,
+				(string) $raw_data_key,
 				$value,
 			);
 		}
-		$chart_data[$postdata_key] = array(
+		$chart_data[ $postdata_key ] = array(
 			'chart' => $chart['chart'],
 			'data'  => $data,
 		);

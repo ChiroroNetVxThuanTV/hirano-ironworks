@@ -1,7 +1,22 @@
+<?php
+/**
+ * @package mw-wp-form
+ * @author websoudan
+ * @license GPL-2.0+
+ */
+?>
+
 <b class="add-btn"><?php esc_html_e( 'Add Validation rule', 'mw-wp-form' ); ?></b>
 <div class="repeatable-boxes">
-	<?php foreach ( $validation as $key => $value ) : $value = array_merge( $validation_keys, $value ); ?>
-	<div class="repeatable-box" <?php if ( $key === 0 ) : ?>style="display:none"<?php endif; ?>>
+	<?php
+	foreach ( $validation as $key => $value ) :
+		$value = array_merge( $validation_keys, $value );
+		?>
+	<div class="repeatable-box"
+		<?php
+		if ( 0 === $key ) :
+			?>
+		style="display:none"<?php endif; ?>>
 		<div class="sortable-icon-handle"></div>
 		<div class="remove-btn"><b>×</b></div>
 		<div class="open-btn"><span><?php echo esc_attr( $value['target'] ); ?></span><b>▼</b></div>
@@ -10,7 +25,7 @@
 			<table border="0" cellpadding="0" cellspacing="0">
 				<tr>
 					<td colspan="2">
-						<?php foreach ( $validation_rules as $validation_rule => $instance ) : ?>
+						<?php foreach ( $validation_rules as $instance ) : ?>
 							<?php $instance->admin( $key, $value ); ?>
 						<?php endforeach; ?>
 					</td>

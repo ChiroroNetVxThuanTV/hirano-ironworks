@@ -1,28 +1,28 @@
 <?php
 /**
- * Name       : MW WP Form Field Datepicker
- * Description: datepickerを出力
- * Version    : 1.8.1
- * Author     : Takashi Kitajima
- * Author URI : http://2inc.org
- * Created    : December 14, 2012
- * Modified   : March 9, 2017
- * License    : GPLv2 or later
- * License URI: http://www.gnu.org/licenses/gpl-2.0.html
+ * @package mw-wp-form
+ * @author websoudan
+ * @license GPL-2.0+
+ */
+
+/**
+ * MW_WP_Form_Field_Datepicker
  */
 class MW_WP_Form_Field_Datepicker extends MW_WP_Form_Abstract_Form_Field {
 
 	/**
-	 * $type
-	 * フォームタグの種類 input|select|button|input_button|error|other
+	 * Types of form type.
+	 * input|select|button|input_button|error|other.
+	 *
 	 * @var string
 	 */
 	public $type = 'input';
 
 	/**
-	 * set_names
-	 * shortcode_name、display_nameを定義。各子クラスで上書きする。
-	 * @return array shortcode_name, display_name
+	 * Set shortcode_name and display_name.
+	 * Overwrite required for each child class.
+	 *
+	 * @return array
 	 */
 	protected function set_names() {
 		return array(
@@ -32,9 +32,9 @@ class MW_WP_Form_Field_Datepicker extends MW_WP_Form_Abstract_Form_Field {
 	}
 
 	/**
-	 * set_defaults
-	 * $this->defaultsを設定し返す
-	 * @return array defaults
+	 * Set default attributes.
+	 *
+	 * @return array
 	 */
 	protected function set_defaults() {
 		return array(
@@ -50,9 +50,9 @@ class MW_WP_Form_Field_Datepicker extends MW_WP_Form_Abstract_Form_Field {
 	}
 
 	/**
-	 * input_page
-	 * 入力ページでのフォーム項目を返す
-	 * @return string HTML
+	 * Callback of add shortcode for input page.
+	 *
+	 * @return string
 	 */
 	protected function input_page() {
 		global $wp_scripts;
@@ -60,9 +60,9 @@ class MW_WP_Form_Field_Datepicker extends MW_WP_Form_Abstract_Form_Field {
 		wp_enqueue_style( 'jquery.ui', '//ajax.googleapis.com/ajax/libs/jqueryui/' . $ui->ver . '/themes/smoothness/jquery-ui.min.css', array(), $ui->ver );
 		wp_enqueue_script( 'jquery-ui-datepicker' );
 
-		$Json_Parser = new MW_WP_Form_Json_Parser( $this->atts['js'] );
+		$Json_Parser      = new MW_WP_Form_Json_Parser( $this->atts['js'] );
 		$this->atts['js'] = $Json_Parser->create_json();
-		$js = json_decode( $this->atts['js'], true );
+		$js               = json_decode( $this->atts['js'], true );
 
 		// jsの指定がないときはデフォルトで年付き変更機能追加
 		if ( empty( $js ) ) {
@@ -74,16 +74,19 @@ class MW_WP_Form_Field_Datepicker extends MW_WP_Form_Abstract_Form_Field {
 		}
 
 		$translate_datepicker = apply_filters( 'mwform_translate_datepicker_' . $this->form_key, true );
-		if ( $translate_datepicker && get_locale() == 'ja' ) {
-			$js = array_merge( array(
-				'yearSuffix'      => '年',
-				'dateFormat'      => 'yy年mm月dd日',
-				'dayNames'        => array( '日曜日', '月曜日', '火曜日', '水曜日', '木曜日', '金曜日', '土曜日' ),
-				'dayNamesMin'     => array( '日', '月', '火', '水', '木', '金', '土' ),
-				'dayNamesShort'   => array( '日曜', '月曜', '火曜', '水曜', '木曜', '金曜', '土曜' ),
-				'monthNames'      => array( '1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月' ),
-				'monthNamesShort' => array( '1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月' ),
-			), $js );
+		if ( $translate_datepicker && 'ja' === get_locale() ) {
+			$js = array_merge(
+				array(
+					'yearSuffix'      => '年',
+					'dateFormat'      => 'yy年mm月dd日',
+					'dayNames'        => array( '日曜日', '月曜日', '火曜日', '水曜日', '木曜日', '金曜日', '土曜日' ),
+					'dayNamesMin'     => array( '日', '月', '火', '水', '木', '金', '土' ),
+					'dayNamesShort'   => array( '日曜', '月曜', '火曜', '水曜', '木曜', '金曜', '土曜' ),
+					'monthNames'      => array( '1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月' ),
+					'monthNamesShort' => array( '1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月' ),
+				),
+				$js
+			);
 		}
 
 		$this->atts['js'] = json_encode( $js );
@@ -94,24 +97,27 @@ class MW_WP_Form_Field_Datepicker extends MW_WP_Form_Abstract_Form_Field {
 		}
 
 		$_ret  = '';
-		$_ret .= $this->Form->datepicker( $this->atts['name'], array(
-			'id'          => $this->atts['id'],
-			'class'       => $this->atts['class'],
-			'size'        => $this->atts['size'],
-			'js'          => $this->atts['js'],
-			'value'       => $value,
-			'placeholder' => $this->atts['placeholder'],
-		) );
-		if ( $this->atts['show_error'] !== 'false' ) {
+		$_ret .= $this->Form->datepicker(
+			$this->atts['name'],
+			array(
+				'id'          => $this->atts['id'],
+				'class'       => $this->atts['class'],
+				'size'        => $this->atts['size'],
+				'js'          => $this->atts['js'],
+				'value'       => $value,
+				'placeholder' => $this->atts['placeholder'],
+			)
+		);
+		if ( 'false' !== $this->atts['show_error'] ) {
 			$_ret .= $this->get_error( $this->atts['name'] );
 		}
 		return $_ret;
 	}
 
 	/**
-	 * confirm_page
-	 * 確認ページでのフォーム項目を返す
-	 * @return string HTML
+	 * Callback of add shortcode for confirm page.
+	 *
+	 * @return string
 	 */
 	protected function confirm_page() {
 		$value = $this->Data->get_raw( $this->atts['name'] );
@@ -121,8 +127,10 @@ class MW_WP_Form_Field_Datepicker extends MW_WP_Form_Abstract_Form_Field {
 	}
 
 	/**
-	 * add_mwform_tag_generator
-	 * フォームタグジェネレーター
+	 * Display tag generator dialog.
+	 * Overwrite required for each child class.
+	 *
+	 * @param array $options Options.
 	 */
 	public function mwform_tag_generator_dialog( array $options = array() ) {
 		?>
@@ -162,7 +170,7 @@ class MW_WP_Form_Field_Datepicker extends MW_WP_Form_Abstract_Form_Field {
 			<input type="text" name="placeholder" value="<?php echo esc_attr( $placeholder ); ?>" />
 		</p>
 		<p>
-			<strong><?php esc_html_e( 'Dsiplay error', 'mw-wp-form' ); ?></strong>
+			<strong><?php esc_html_e( 'Display error', 'mw-wp-form' ); ?></strong>
 			<?php $show_error = $this->get_value_for_generator( 'show_error', $options ); ?>
 			<label><input type="checkbox" name="show_error" value="false" <?php checked( 'false', $show_error ); ?> /> <?php esc_html_e( 'Don\'t display error.', 'mw-wp-form' ); ?></label>
 		</p>

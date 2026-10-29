@@ -1,3 +1,11 @@
+<?php
+/**
+ * @package mw-wp-form
+ * @author websoudan
+ * @license GPL-2.0+
+ */
+?>
+
 <span class="mwform-tel-field">
 	<input type="text"
 		name="<?php echo esc_attr( $fields[0]['name'] ); ?>"
