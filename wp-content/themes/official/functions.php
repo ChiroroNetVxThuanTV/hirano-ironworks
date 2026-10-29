@@ -36,9 +36,10 @@ function remove_counts()
   $menu[65][0] = 'プラグイン';
   $submenu['index.php'][10][0] = 'Updates';
 }
-add_filter('pre_site_transient_update_core', '__return_zero');
-remove_action('wp_version_check', 'wp_version_check');
-remove_action('admin_init', '_maybe_update_core');
+// 以下3行を削除（WP 7.1の更新画面でエラーになるため・セキュリティ更新の通知を受け取るため）
+// add_filter('pre_site_transient_update_core', '__return_zero');
+// remove_action('wp_version_check', 'wp_version_check');
+// remove_action('admin_init', '_maybe_update_core');
 
 //ログイン画面
 function login_css()
