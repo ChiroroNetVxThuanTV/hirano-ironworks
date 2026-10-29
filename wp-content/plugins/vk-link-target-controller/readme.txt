@@ -1,10 +1,10 @@
 === VK Link Target Controller ===
-Contributors: vektor-inc,kurudrive,dswebstudio,bizvektor,nc30,catherine8007
+Contributors: vektor-inc,kurudrive,dswebstudio,bizvektor,nc30,catherine8007,rickaddison7634,sysbird,una9,mypacecreator
 Donate link:
 Tags: redirection,link,recent posts,list,page,post
 Requires at least: 5.3
-Tested up to: 6.0.2
-Stable tag: 1.7.2
+Tested up to: 7.1
+Stable tag: 1.10.5
 License: GPL2
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -27,7 +27,7 @@ Fast redirection to the product you want to sell!.
 = GitHub repository =
 
 VK Link Target Controller official repository on GitHub.
-[https://github.com/kurudrive/vk-link-target-controller](https://github.com/kurudrive/vk-link-target-controller)
+[https://github.com/vektor-inc/vk-link-target-controller](https://github.com/vektor-inc/vk-link-target-controller)
 Latest plugin version is always on GitHub.
 
 == Installation ==
@@ -82,18 +82,28 @@ VK Link Target Controller supports Japanese in URLs so probably you can add othe
 = My link won't open on a new window. =
 
 VK Link Target Controller adds a filter on the `the_permalink()` WordPress function, which means the redirection won't work if your theme uses another function, for example `get_permalink()` to display the links.
-In order to have the link opened in a new window VK Link Target Controller needs a theme with the post id as id on the `<a>` parent element.
+In order to have the link opened in a new window VK Link Target Controller needs a theme with the post id as class on the `<a>` parent element.
 
 Your theme probably has it if it follows the WordPress Theme recommendations.
 
-Example:
+Example A:
 `
-<div class="post-item post-block front-page-list" id="post-<?php the_ID(); ?>">
-	<a href="<?php the permalink(); ?>">
+<div class="post-item post-block front-page-list post-<?php the_ID(); ?>" id="post-<?php the_ID(); ?>">
+	<a href="<?php the_permalink(); ?>">
  		<?php the_title(); ?>
 	</a>
 </div>
 `
+
+Example B:
+`
+<div class="<?php echo esc_attr( implode( ' ', get_post_class() ) ); ?>" id="post-<?php the_ID(); ?>">
+    <a href="<?php the_permalink(); ?>">
+        <?php the_title(); ?>
+    </a>
+</div>
+`
+get_post_class() returns a value that includes the post ID.
 
 = Any chance to get the plugin translated in my language? =
 
@@ -108,6 +118,62 @@ But we have a .pot file available so feel free to translate it in your language 
 4. A relative url that refer to a page of your website: **note slash "/" at the beginning**.
 
 == Changelog ==
+
+= 1.10.5 =
+* [ Bug Fix ] Fixed an issue where redirect URLs delivered via Ajax kept HTML-encoded ampersands ( &#038; ), breaking external URLs with multiple query parameters.
+* [ Bug Fix ] Fixed an issue on PHP 8.0 or earlier where redirect URLs containing single quotes were left partially HTML-encoded, resulting in broken links.
+
+= 1.10.4 =
+* [ Other ] Updated "Tested up to" to 7.1, verified against the WordPress 7.1 release candidate.
+
+= 1.10.3 =
+* [ Other ] Corrected "Tested up to" from 7.1 to 7.0, matching the WordPress versions actually verified in CI (the 7.1 core tag was not yet available for testing).
+
+= 1.10.2 =
+* [ Bug Fix ] Fixed an undefined array key PHP warning on PHP 8.x when the nonce field is absent from the post save request.
+* [ Bug Fix ] Fixed an issue on the settings screen where styles and scripts could fail to update due to caching after an update, and an issue where the left side navigation could be cut off when notices were displayed.
+* [ Security Fix ] Fixed an issue where the AJAX link target endpoint (`action=ids`) could expose link settings for non-published posts (e.g. drafts) to unauthenticated users. The query now explicitly limits results to published posts.
+
+= 1.10.1 =
+* [ Bug Fix ] Fixed an issue where the redirect URL could not be saved, displayed, or updated on custom post types. The fix covers CPTs registered later by other plugins (e.g. CPT UI, ExUnit), CPTs with a customized `capability_type` (e.g. a CPT using `edit_sites` instead of `edit_posts`), and CPTs that do not declare `custom-fields` post_type support.
+
+= 1.10.0 =
+* [ Spec Change ] Rename option key from 'custom-post-types' to 'vk_ltc_custom_post_types' to avoid conflicts with other plugins. Existing data is automatically migrated. Added fallback to legacy key for frontend requests before admin_init migration runs.
+* [ Add Function ] Show an edit link next to post titles for logged-in users who have edit permission, when a redirect URL is set on the post.
+* [ New Feature ] Clean up plugin-specific data (post meta and options) from the database when the plugin is deleted.
+* [ Other ] Fix incorrect sample code in plugin description (class attribute is required, not id).
+
+= 1.9.0 =
+* [ Specification change ] Migrate meta box to block editor native sidebar panel for WordPress 7.0 RTC (Real-Time Collaboration) compatibility.
+
+= 1.8.1 =
+* [ Other ] Add back compatibility flag to meta box for WordPress 7.0 RTC support.
+
+= 1.8.0 =
+* [ Add Function ] Add internal link search with WordPress standard link dialog.
+
+= 1.7.10 =
+ [ Bug fix ] Avoid PHP warning when current post is not available (e.g. comment edit screen).
+
+= 1.7.9 =
+ [ Other ] Update Readme
+
+= 1.7.8 =
+ [ Bug fix ] Fix fatal error on setting screen.
+
+= 1.7.7 =
+* [ Other ] change version only ( change WordPress.org banner ).
+* [ Bug fix ] Fix the issue where URL retrieval sometimes fails.
+
+= 1.7.6 =
+* [ Bug fix ] Handle links other than the_permalink.
+
+= 1.7.5 =
+* [ Other ] Delete unnecessary files
+
+= 1.7.4 =
+* [ Bug fix ] Fixed an issue that occurred in a PHP 8.0 or higher environment.
+* [ Bug fix ] Fixed an issue where the feature to open in a new window did not work.
 
 = 1.7.2 =
 * [ Other ] Update admin settingpage library 2.6.0

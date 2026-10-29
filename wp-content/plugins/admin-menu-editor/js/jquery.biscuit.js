@@ -39,25 +39,26 @@
 			// Replace server-side written pluses with spaces.
 			// If we can't decode the cookie, ignore it, it's unusable.
 			s = decodeURIComponent(s.replace(pluses, ' '));
-		} catch(e) {
+		} catch (e) {
 			return;
 		}
 
 		try {
 			// If we can't parse the cookie, ignore it, it's unusable.
 			return config.json ? JSON.parse(s) : s;
-		} catch(e) {}
+		} catch (e) {
+		}
 	}
 
 	function read(s, converter) {
 		var value = config.raw ? s : parseCookieValue(s);
-		return $.isFunction(converter) ? converter(value) : value;
+		return (typeof converter === 'function') ? converter(value) : value;
 	}
 
 	var config = $.cookie = function (key, value, options) {
 
 		// Write
-		if (value !== undefined && !$.isFunction(value)) {
+		if (value !== undefined && !(typeof value === 'function')) {
 			options = $.extend({}, config.defaults, options);
 
 			if (typeof options.expires === 'number') {
@@ -68,9 +69,10 @@
 			return (document.cookie = [
 				encode(key), '=', stringifyCookieValue(value),
 				options.expires ? '; expires=' + options.expires.toUTCString() : '', // use expires attribute, max-age is not supported by IE
-				options.path    ? '; path=' + options.path : '',
-				options.domain  ? '; domain=' + options.domain : '',
-				options.secure  ? '; secure' : ''
+				options.path ? '; path=' + options.path : '',
+				options.domain ? '; domain=' + options.domain : '',
+				options.samesite ? '; samesite=' + options.samesite : '',
+				options.secure ? '; secure' : ''
 			].join(''));
 		}
 
@@ -103,15 +105,109 @@
 		return result;
 	};
 
-	config.defaults = {};
+	config.defaults = {
+		'samesite': 'lax'
+	};
 
 	$.removeCookie = function (key, options) {
 		if ($.cookie(key) !== undefined) {
 			// Must not alter options, thus extending a fresh object...
-			$.cookie(key, '', $.extend({}, options, { expires: -1 }));
+			$.cookie(key, '', $.extend({}, options, {expires: -1}));
 			return true;
 		}
 		return false;
 	};
 
 }));
+
+
+/**
+ * A wrapper object for a user preference stored in a cookie.
+ *
+ * Created by Jānis Elsts. Added to the same file as the cookie library
+ * to avoid a separate HTTP request.
+ *
+ * @param {string} name
+ * @param {number} [expirationInDays]
+ * @param {boolean} [jsonEncodingEnabled]
+ * @param {string} [path]
+ * @param {string} [fullCookieName]
+ * @constructor
+ */
+function WsAmePreferenceCookie(name, expirationInDays, jsonEncodingEnabled, path, fullCookieName) {
+	if (typeof expirationInDays === 'undefined') {
+		expirationInDays = 90;
+	}
+	if (typeof jsonEncodingEnabled === 'undefined') {
+		jsonEncodingEnabled = false;
+	}
+	if (typeof path === 'undefined') {
+		path = '/';
+	}
+
+	if ((typeof fullCookieName !== 'string') || (fullCookieName === '')) {
+		//Full name = unique prefix + name with the first letter capitalized.
+		fullCookieName = 'amePref' + name.charAt(0).toUpperCase() + name.slice(1);
+	}
+
+	this.fullCookieName = fullCookieName;
+	this.jsonEncodingEnabled = jsonEncodingEnabled;
+	this.cookieOptions = {
+		'path': path,
+		'samesite': 'lax'
+	};
+	if (expirationInDays > 0) {
+		this.cookieOptions.expires = expirationInDays;
+	}
+}
+
+WsAmePreferenceCookie.prototype.read = function (defaultValue) {
+	let cookieValue = jQuery.cookie(this.fullCookieName);
+	if (typeof cookieValue === 'undefined') {
+		return defaultValue;
+	}
+
+	if (this.jsonEncodingEnabled) {
+		if ((typeof cookieValue === 'string') && (cookieValue !== '')) {
+			try {
+				cookieValue = JSON.parse(cookieValue);
+			} catch (error) {
+				return defaultValue; //Use the default value if the stored JSON is invalid.
+			}
+		} else {
+			return defaultValue;
+		}
+	}
+
+	return cookieValue;
+}
+
+WsAmePreferenceCookie.prototype.write = function (value) {
+	if (this.jsonEncodingEnabled) {
+		value = JSON.stringify(value);
+	}
+	jQuery.cookie(this.fullCookieName, value, this.cookieOptions);
+}
+
+WsAmePreferenceCookie.prototype.removeCookie = function () {
+	return jQuery.removeCookie(this.fullCookieName, this.cookieOptions);
+}
+
+/**
+ * Read the cookie value, and if it's set, write it back to the cookie.
+ * This extends the cookie's expiration date by the configured number of days.
+ *
+ * @param {*} defaultValue
+ * @returns {*}
+ */
+WsAmePreferenceCookie.prototype.readAndRefresh = function (defaultValue) {
+	const notFound = {};
+	const value = this.read(notFound);
+	if (value === notFound) {
+		return defaultValue;
+	}
+
+	//phpcs:ignore WordPressVIPMinimum.JS.HTMLExecutingFunctions.write -- This is not document.write(), but a custom method.
+	this.write(value);
+	return value;
+}

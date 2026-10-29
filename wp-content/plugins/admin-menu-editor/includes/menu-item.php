@@ -31,11 +31,16 @@ abstract class ameMenuItem {
 		'upload.php' => true, 'user-new.php' => true, 'users.php' => true, 'widgets.php' => true,
 	);
 
+	private static $mappable_parent_whitelist = '@^(?:profile|import|post-new|edit-tags)\.php@';
+
+	private static $cached_site_url = null;
+	private static $is_switch_hook_set = false;
+
 	/**
 	 * Convert a WP menu structure to an associative array.
 	 *
 	 * @param array $item An menu item.
-	 * @param int|string $position The position (index) of the the menu item.
+	 * @param int|string $position The position (index) of the menu item.
 	 * @param string|null $parent The slug of the parent menu that owns this item. Null for top level menus.
 	 * @return array
 	 */
@@ -44,12 +49,12 @@ abstract class ameMenuItem {
 		$default_css_class = ($parent === null) ? 'menu-top' : '';
 		$item = array(
 			'menu_title'   => strval($item[0]),
-			'access_level' => strval($item[1]), //= required capability
-			'file'         => $item[2],
-			'page_title'   => (isset($item[3]) ? strval($item[3]) : ''),
-			'css_class'    => (isset($item[4]) ? strval($item[4]) : $default_css_class),
-			'hookname'     => (isset($item[5]) ? strval($item[5]) : ''), //Used as the ID attr. of the generated HTML tag.
-			'icon_url'     => (isset($item[6]) ? strval($item[6]) : 'dashicons-admin-generic'),
+			'access_level' => (isset($item[1]) ? self::sanitize_string_prop($item[1]) : ''), //= required capability
+			'file'         => (array_key_exists(2, $item) ? $item[2] : ''),
+			'page_title'   => (isset($item[3]) ? self::sanitize_string_prop($item[3]) : ''),
+			'css_class'    => (isset($item[4]) ? self::sanitize_string_prop($item[4]) : $default_css_class),
+			'hookname'     => (isset($item[5]) ? self::sanitize_string_prop($item[5]) : ''), //Used as the ID attr. of the generated HTML tag.
+			'icon_url'     => (isset($item[6]) ? self::sanitize_string_prop($item[6]) : 'dashicons-admin-generic'),
 			'position'     => $position,
 			'parent'       => $parent,
 		);
@@ -83,6 +88,34 @@ abstract class ameMenuItem {
 		return array_merge(self::basic_defaults(), $item);
 	}
 
+	/**
+	 * Sanitize a menu property value that is supposed to be a string.
+	 *
+	 * There are certain admin menu properties that are supposed to be strings, but
+	 * in practice some plugins and themes set them to arrays, objects, true/false,
+	 * etc. This function will convert those values to strings, potentially losing
+	 * information in the process.
+	 *
+	 * strval() is not used because it will trigger a PHP warning if the value is
+	 * an array or an object that doesn't have a `__toString()` method.
+	 *
+	 *
+	 * @param mixed $value
+	 * @return string
+	 */
+	protected static function sanitize_string_prop($value) {
+		if ( is_scalar($value) ) {
+			return strval($value);
+		} else if ( is_array($value) ) {
+			if ( empty($value) ) {
+				return '';
+			}
+			return 'array[' . count($value) . ']';
+		} else {
+			return '';
+		}
+	}
+
 	public static function basic_defaults() {
 		static $basic_defaults = null;
 		if ( $basic_defaults !== null ) {
@@ -99,9 +132,9 @@ abstract class ameMenuItem {
 			'page_heading' => '',
 	        'position' => 0,
 	        'parent' => null,
+            'css_class' => '',
 
-	        //Fields that apply only to top level menus.
-	        'css_class' => 'menu-top',
+			//Fields that apply only to top level menus.
 	        'hookname' => '',
 	        'icon_url' => 'dashicons-admin-generic',
 	        'separator' => false,
@@ -111,12 +144,14 @@ abstract class ameMenuItem {
 	        //Internal fields that may not map directly to WP menu structures.
 			'open_in' => 'same_window', //'new_window', 'iframe' or 'same_window' (the default)
             'iframe_height' => 0,
+            'is_iframe_scroll_disabled' => false,
 			'template_id' => '', //The default menu item that this item is based on.
 			'is_plugin_page' => false,
 			'custom' => false,
 			'url' => '',
 			'embedded_page_id' => 0,
 			'embedded_page_blog_id' => function_exists('get_current_blog_id') ? get_current_blog_id() : 1,
+			'local_id' => '',
 		);
 
 		return $basic_defaults;
@@ -158,11 +193,12 @@ abstract class ameMenuItem {
 			'access_level' => 'read',
 			'extra_capability' => '',
 			'page_title' => '',
-			'css_class' => 'menu-top',
+			'css_class' => '',
 			'hookname' => '',
 			'icon_url' => 'dashicons-admin-generic',
 			'open_in' => 'same_window',
 			'iframe_height' => 0,
+			'is_iframe_scroll_disabled' => false,
 			'is_plugin_page' => false,
 			'page_heading' => '',
 			'colors' => false,
@@ -238,16 +274,46 @@ abstract class ameMenuItem {
 			}
 		}
 
-		if ($parent_file === 'profile.php') {
-			$parent_file = 'users.php';
+		//Map known alternative parents to admin parent menus. This is necessary to ensure that
+		//certain menu items have the same template ID both for admins and for regular users.
+		static $inverse_parent_map = null;
+		global $_wp_real_parent_file;
+		if ( ($inverse_parent_map === null) && !empty($_wp_real_parent_file) && is_array($_wp_real_parent_file) ) {
+			$inverse_parent_map = array_flip($_wp_real_parent_file);
+		}
+		if (
+			isset($parent_file, $inverse_parent_map[$parent_file])
+			&& (preg_match(self::$mappable_parent_whitelist, $parent_file) === 1)
+		) {
+			$parent_file = $inverse_parent_map[$parent_file];
 		}
 
 		//Special case: In WP 4.0+ the URL of the "Appearance -> Customize" item is different on every admin page.
 		//This is because the URL includes a "return" parameter that contains the current page's URL. It also makes
 		//the template ID different on every page, so it's impossible to identify the menu. To fix that, lets remove
 		//the "return" parameter from the ID.
-		if ( ($parent_file === 'themes.php') && (strpos($item_file, 'customize.php?') === 0) ) {
+		if ( strpos($item_file, 'customize.php?') === 0 ) {
 			$item_file = remove_query_arg('return', $item_file);
+		}
+
+		//Special case: Remove the current site URL from fully qualified URLs.
+		//This way template IDs will still match if the menu configuration is imported on a different site.
+		if ( strpos($item_file, '://') !== false ) {
+			$site_url = self::get_site_url();
+			$site_url_length = strlen($site_url);
+			if (
+				($site_url_length > 0)
+				//Does the item URL start with the site URL?
+				&& (strncmp($item_file, $site_url, $site_url_length) === 0)
+				//Only cut off the site URL if there will be something left.
+				//We don't want the ID to be an empty string.
+				&& (strlen($item_file) > $site_url_length)
+			) {
+				//The site URL usually doesn't have a trailing slash, but sometimes it does,
+				//so we could end up either with "/wp-admin/foo.php" or "wp-admin/foo.php".
+				//For consistency, let's always prepend a slash to the result.
+				$item_file = '/' .ltrim(substr($item_file, $site_url_length), '/');
+			}
 		}
 
 		//Special case: A menu item can have an empty slug. This is technically very wrong, but it works (sort of)
@@ -450,14 +516,14 @@ abstract class ameMenuItem {
 		foreach($capability_fields as $field) {
 			$value = self::get($item, $field);
 			if ( !self::is_default($item, $field) && is_string($value) ) {
-				$item[$field] = strip_tags($value);
+				$item[$field] = wp_strip_all_tags($value);
 			}
 		}
 
 		//Menu icons can be all kinds of stuff (dashicons, data URIs, etc), but they can't contain HTML.
 		//See /wp-admin/menu-header.php line #90 and onwards for how WordPress handles icons.
 		if ( !self::is_default($item, 'icon_url') ) {
-			$item['icon_url'] = strip_tags($item['icon_url']);
+			$item['icon_url'] = wp_strip_all_tags($item['icon_url']);
 		}
 
 		//WordPress already sanitizes the menu ID (hookname) on display, but, again, lets clean it just in case.
@@ -510,11 +576,14 @@ abstract class ameMenuItem {
 
 		if ( self::is_hook_or_plugin_page($menu_url, $parent_url, $has_hook) ) {
 			$parent_file = self::remove_query_from($parent_url);
-			$base_file = self::is_wp_admin_file($parent_file) ? $parent_url : 'admin.php';
+			$base_file = self::is_wp_admin_file($parent_file) ? html_entity_decode($parent_url) : 'admin.php';
 			//add_query_arg() might be more robust, but it's significantly slower.
 			$url = $base_file
 				. ((strpos($base_file, '?') === false) ? '?' : '&')
-				. 'page=' . urlencode($menu_url);
+				. 'page=' . $menu_url;
+			//Surprisingly, WordPress does NOT encode the menu slug when using it in a query parameter ("?page=slug").
+			//This allows plugins to use tricks like passing additional query parameters by simply appending them
+			//to the slug. For example, this works: "something&param=foo".
 		} else {
 			$url = $menu_url;
 		}
@@ -574,7 +643,7 @@ abstract class ameMenuItem {
 	 * @param string $filename
 	 * @return bool
 	 */
-	private static function is_wp_admin_file($filename) {
+	public static function is_wp_admin_file($filename) {
 		//Check our hard-coded list of admin pages first. It's measurably faster than
 		//hitting the disk with is_file().
 		if ( isset(self::$known_wp_admin_files[$filename]) ) {
@@ -626,5 +695,107 @@ abstract class ameMenuItem {
 			return substr($url, 0, $pos);
 		}
 		return $url;
+	}
+
+	/**
+	 * Remove the number of pending updates or other count elements from a menu title.
+	 *
+	 * @param string $menuTitle
+	 * @return string
+	 */
+	public static function remove_update_count($menuTitle) {
+		if ( (stripos($menuTitle, '<span') === false) || !class_exists('DOMDocument', false) ) {
+			return $menuTitle;
+		}
+
+		$dom = new DOMDocument();
+		$uniqueId = 'ame-rex-title-wrapper-' . time();
+		if ( @$dom->loadHTML('<div id="' . $uniqueId . '">' . $menuTitle . '</div>') ) {
+			$xpath = new DOMXpath($dom);
+			$result = $xpath->query('//span[contains(@class,"update-plugins") or contains(@class,"awaiting-mod")]');
+			if ( $result->length > 0 ) {
+				//Remove all matched nodes. We must iterate backwards to prevent messing up the DOMNodeList.
+				for ($i = $result->length - 1; $i >= 0; $i--) {
+					$span = $result->item($i);
+					if ( $span->parentNode ) {
+						$span->parentNode->removeChild($span);
+					}
+				}
+
+				$innerHtml = '';
+				$children = $dom->getElementById($uniqueId)->childNodes;
+				//In theory, $children should always be a DOMNodeList, but there has been
+				//at least one report about the foreach() statement throwing a warning
+				//because $children was not iterable.
+				if ( $children instanceof Traversable ) {
+					foreach ($children as $child) {
+						$innerHtml .= $child->ownerDocument->saveHTML($child);
+					}
+				}
+
+				return $innerHtml;
+			}
+		}
+		return $menuTitle;
+	}
+
+	/**
+	 * Get the current site URL.
+	 *
+	 * This is equivalent to calling the get_site_url() WordPress API function without
+	 * arguments, except this method caches the result and doesn't run filters every time.
+	 *
+	 * @return string
+	 */
+	private static function get_site_url() {
+		if ( self::$cached_site_url !== null ) {
+			return self::$cached_site_url;
+		}
+		self::$cached_site_url = get_site_url();
+
+		//Clear the cache when WordPress switches to a different site.
+		if ( !self::$is_switch_hook_set ) {
+			self::$is_switch_hook_set = true;
+			add_action('switch_blog', array(__CLASS__, 'clear_per_site_cache'), 10, 0);
+		}
+
+		return self::$cached_site_url;
+	}
+
+	public static function clear_per_site_cache() {
+		self::$cached_site_url = null;
+	}
+
+	/**
+	 * Add a CSS class to a submenu item.
+	 *
+	 * The admin menu API doesn't provide a way to do this, but at least as of WP 6.2,
+	 * classes can in fact be added to submenu items.
+	 *
+	 * @param string $parent_slug
+	 * @param string $item_slug
+	 * @param string $css_class
+	 * @return bool
+	 */
+	public static function add_class_to_submenu_item($parent_slug, $item_slug, $css_class) {
+		global $submenu;
+		if ( !isset($submenu[$parent_slug]) || (!is_array($submenu[$parent_slug])) ) {
+			return false;
+		}
+
+		foreach ($submenu[$parent_slug] as &$item) {
+			if ( isset($item[2]) && ($item[2] === $item_slug) ) {
+				if ( empty($item[4]) ) {
+					$item[4] = $css_class;
+				} else if ( is_string($item[4]) ) {
+					$item[4] .= ' ' . $css_class;
+				} else {
+					return false; //Unsupported data type.
+				}
+				return true;
+			}
+		}
+
+		return false;
 	}
 }

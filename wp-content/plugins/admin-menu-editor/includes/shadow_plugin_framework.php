@@ -22,7 +22,8 @@ class MenuEd_ShadowPluginFramework {
 	public $option_name = ''; //should be set or overridden by the plugin
 	protected $defaults = array(); //should be set or overridden by the plugin
 	protected $sitewide_options = false; //WPMU only : save the setting in a site-wide option
-	protected $serialize_with_json = false; //Use the JSON format for option storage 
+	protected $serialize_with_json = false; //Use the JSON format for option storage
+	protected $zlib_compression = false;
 	
 	public $plugin_file = ''; //Filename of the plugin.
 	public $plugin_basename = ''; //Basename of the plugin, as returned by plugin_basename().
@@ -120,7 +121,17 @@ class MenuEd_ShadowPluginFramework {
 		} else {
 			$this->options = get_option($option_name);
 		}
-		
+
+		$prefix = 'gzcompress:';
+		if (
+			is_string($this->options)
+			&& (substr($this->options, 0, strlen($prefix)) === $prefix)
+			&& function_exists('gzuncompress')
+		) {
+			//TODO: Maybe this would be faster if we stored the flag separately?
+			$this->options = unserialize(gzuncompress(base64_decode(substr($this->options, strlen($prefix)))));
+		}
+
 		if ( $this->serialize_with_json || is_string($this->options) ){
 			$this->options = $this->json_decode($this->options, true);
 		}
@@ -146,7 +157,15 @@ class MenuEd_ShadowPluginFramework {
 			if ( $this->serialize_with_json ){
 				$stored_options = $this->json_encode($stored_options);
 			}
-			
+
+			if (
+				$this->zlib_compression
+				&& function_exists('gzcompress')
+				&& function_exists('gzuncompress')
+			) {
+				$stored_options = 'gzcompress:' . base64_encode(gzcompress(serialize($stored_options)));
+			}
+
 			if ( $this->sitewide_options && is_multisite() ) {
 				return self::atomic_update_site_option($this->option_name, $stored_options);
 			} else {
@@ -168,6 +187,7 @@ class MenuEd_ShadowPluginFramework {
 	 * @return bool
 	 */
 	public static function atomic_update_site_option($option_name, $data) {
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery -- WPDB doesn't have utility methods for locking, so direct queries are needed.
 		global $wpdb; /** @var wpdb $wpdb */
 		$lock = 'ame.' . (is_multisite() ? $wpdb->sitemeta : $wpdb->options ) . '.' . $option_name;
 
@@ -179,7 +199,7 @@ class MenuEd_ShadowPluginFramework {
 		$wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lock));
 
 		return $updated;
-
+		// phpcs:enable
 	}
 	
 	
@@ -199,9 +219,8 @@ class MenuEd_ShadowPluginFramework {
 	        $json = new Services_JSON($flag);
 	        return( $json->decode($data) );
     	} else {
-    		trigger_error('No JSON parser available', E_USER_ERROR);
-		    return null;
-    	}    
+			throw new RuntimeException('No JSON parser available');
+    	}
     }
 
   /**
@@ -211,16 +230,19 @@ class MenuEd_ShadowPluginFramework {
    * @return string
    */
     function json_encode($data) {
-    	if ( function_exists('json_encode') ){
-    		return json_encode($data);
-    	}
+	    if ( function_exists('wp_json_encode') ) {
+		    return wp_json_encode($data);
+	    } else if ( function_exists('json_encode') ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Fallback.
+		    return json_encode($data);
+	    }
+
     	if ( class_exists('Services_JSON') ){
     		$json = new Services_JSON();
         	return( $json->encodeUnsafe($data) );
     	} else {
-    		trigger_error('No JSON parser available', E_USER_ERROR);
-		    return '';
-   		}        
+		    throw new RuntimeException('No JSON parser available');
+   		}
     }    
 
 	
@@ -318,9 +340,17 @@ class MenuEd_ShadowPluginFramework {
 		$normalizedFileName = realpath($filename);
 
 		//If realpath() fails, just normalize the syntax instead.
-		if ( empty($normalizedFileName) || empty($normalizedFileName) ) {
+		if ( empty($normalizedFileName) || empty($normalizedMuPluginDir) ) {
 			$normalizedMuPluginDir = wp_normalize_path(WPMU_PLUGIN_DIR);
 			$normalizedFileName = wp_normalize_path($filename);
+		}
+		//Yet another fallback if the above also fails.
+		if ( !is_string($normalizedMuPluginDir) || empty($normalizedMuPluginDir) ) {
+			if ( is_string(WPMU_PLUGIN_DIR) ) {
+				$normalizedMuPluginDir = WPMU_PLUGIN_DIR;
+			} else {
+				return false;
+			}
 		}
 		return (strpos( $normalizedFileName, $normalizedMuPluginDir ) !== false);
 	}

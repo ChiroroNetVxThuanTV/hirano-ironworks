@@ -1,9 +1,9 @@
 <?php
 /*
 Plugin Name: VK Link Target Controller
-Plugin URI: https://github.com/kurudrive/vk-link-target-controller
+Plugin URI: https://github.com/vektor-inc/vk-link-target-controller
 Description: Allow you to link a post title from the recent posts list to another page (internal or external link) rather than link to the actual post page
-Version: 1.7.2
+Version: 1.10.5
 Author: Vektor,Inc.
 Author URI: http://www.vektor-inc.co.jp/
 License: GPL2
@@ -14,7 +14,23 @@ Text Domain: vk-link-target-controller
 
 define( 'VK_LTC_BASENAME', plugin_basename( __FILE__ ) );
 
-require_once plugin_dir_path( __FILE__ ) . 'inc/vk-admin/vk-admin-config.php';
+require_once __DIR__ . '/vendor/autoload.php';
+require_once __DIR__ . '/inc/register-meta.php';
+
+use VektorInc\VK_Admin\VkAdmin;
+VkAdmin::init();
+
+$admin_pages = array( 'settings_page_vk-link-target-controller_plugin_options' );
+VkAdmin::admin_scripts( $admin_pages );
+
+// Add a link to this plugin's settings page
+function vkltc_set_plugin_meta( $links ) {
+	$settings_link = '<a href="' . admin_url() . 'options-general.php?page=vk-ltc">' . __( 'Setting', 'vk-link-target-controller' ) . '</a>';
+	array_unshift( $links, $settings_link );
+	return $links;
+}
+add_filter( 'plugin_action_links_' . VK_LTC_BASENAME, 'vkltc_set_plugin_meta', 10, 1 );
+
 
 if ( ! class_exists( 'VK_Link_Target_Controller' ) ) {
 
@@ -48,6 +64,17 @@ if ( ! class_exists( 'VK_Link_Target_Controller' ) ) {
 		public $user_capability_settings = 'manage_options'; // can access to the settings page.
 
 		/**
+		 * Setting Page
+		 */
+		function add_custom_setting_page() {
+			$get_page_title = __( 'VK Link Target Controller', 'vk-link-target-controller' );
+			$get_logo_html  = '';
+			$get_menu_html  = '<li><a href="#vk-link-target-controller">' . __( 'VK Link Target Controller', 'vk-link-target-controller' ) . '</a></li>';
+
+			VkAdmin::admin_page_frame( $get_page_title, array( $this, 'settings_page_html' ), $get_logo_html, $get_menu_html );
+		}
+
+		/**
 		 * Initialize_front function
 		 * Activate plugin features on front-end
 		 *
@@ -64,7 +91,7 @@ if ( ! class_exists( 'VK_Link_Target_Controller' ) ) {
 
 				// Activate link rewriting only for concerned posts.
 				if ( ! empty( $link ) && $this->candidate_post_type() ) {
-					add_filter( 'the_permalink', array( $this, 'rewrite_link' ) );
+					add_filter( 'the_permalink', array( $this, 'rewrite_link_filter' ), 10, 2 );
 				}
 			}
 		}
@@ -85,7 +112,15 @@ if ( ! class_exists( 'VK_Link_Target_Controller' ) ) {
 			wp_enqueue_script( 'vk-ltc-js' );
 
 			// Ajax.
-			wp_localize_script( 'vk-ltc-js', 'vkLtc', array( 'ajaxurl' => admin_url( 'admin-ajax.php' ) ) );
+			// editLabel: 編集リンクのラベルテキスト（翻訳対応）。
+			wp_localize_script(
+				'vk-ltc-js',
+				'vkLtc',
+				array(
+					'ajaxurl'   => admin_url( 'admin-ajax.php' ),
+					'editLabel' => __( 'Edit', 'vk-link-target-controller' ),
+				)
+			);
 			add_action( 'wp_ajax_ids', array( $this, 'ajax_rewrite_ids' ) );
 			add_action( 'wp_ajax_nopriv_ids', array( $this, 'ajax_rewrite_ids' ) );
 		}
@@ -101,8 +136,64 @@ if ( ! class_exists( 'VK_Link_Target_Controller' ) ) {
 
 			// allow meta box for user with permission.
 			if ( current_user_can( $this->user_capability_link ) ) {
-				add_action( 'add_meta_boxes', array( $this, 'add_link_meta_box' ) ); // add a meta box for the link to the post edit screen
-				add_action( 'save_post', array( $this, 'save_link' ) ); // save meta box data
+				// Classic editor: add meta box / クラシックエディタ：メタボックスを追加
+				add_action( 'add_meta_boxes', array( $this, 'add_link_meta_box' ) );
+				// Classic editor: save meta box data / クラシックエディタ：メタボックスデータを保存
+				add_action( 'save_post', array( $this, 'save_link' ) );
+				add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_link_dialog_assets' ) );
+				add_action( 'admin_footer', array( $this, 'maybe_output_link_dialog' ) );
+				// Block editor: enqueue React panel / ブロックエディタ：Reactパネルをエンキュー
+				add_action( 'enqueue_block_editor_assets', array( $this, 'enqueue_block_editor_assets' ) );
+			}
+		}
+
+		/**
+		 * Enqueue scripts and styles for WordPress link dialog (site-internal link search).
+		 *
+		 * @access public
+		 * @param string $hook_suffix The current admin page.
+		 * @return void
+		 */
+		function enqueue_link_dialog_assets( $hook_suffix ) {
+			if ( ! in_array( $hook_suffix, array( 'post.php', 'post-new.php' ), true ) ) {
+				return;
+			}
+			if ( ! $this->is_meta_box_screen() ) {
+				return;
+			}
+			// ブロックエディタでReactパネルのビルドがある場合はレガシーアセット不要
+			$screen     = get_current_screen();
+			$asset_file = plugin_dir_path( __FILE__ ) . 'build/index.asset.php';
+			if ( $screen && method_exists( $screen, 'is_block_editor' ) && $screen->is_block_editor() && file_exists( $asset_file ) ) {
+				return;
+			}
+			wp_enqueue_script( 'wplink' );
+			wp_enqueue_style( 'editor-buttons' );
+			wp_enqueue_script(
+				'vk-ltc-admin-link-dialog',
+				plugins_url( 'js/admin-link-dialog.js', __FILE__ ),
+				array( 'jquery', 'wplink' ),
+				LTC_VERSION,
+				true
+			);
+		}
+
+		/**
+		 * Output the WordPress link dialog HTML when not already present (e.g. Block Editor).
+		 *
+		 * @access public
+		 * @return void
+		 */
+		function maybe_output_link_dialog() {
+			if ( ! $this->is_meta_box_screen() ) {
+				return;
+			}
+			if ( ! did_action( 'wp_enqueue_editor' ) ) {
+				// Block Editor or no classic editor: output link dialog HTML manually.
+				if ( ! class_exists( '_WP_Editors', false ) ) {
+					require_once ABSPATH . 'wp-includes/class-wp-editor.php';
+				}
+				_WP_Editors::wp_link_dialog();
 			}
 		}
 
@@ -131,8 +222,10 @@ if ( ! class_exists( 'VK_Link_Target_Controller' ) ) {
 			if ( isset( $post ) && ( is_single() || is_page() ) ) {
 				$redirect = $this->has_redirection( $post->ID );
 				// redirect to the associated link.
+				// Specify ENT_QUOTES and UTF-8 explicitly because on PHP 8.0 or earlier the default flags ( ENT_COMPAT ) leave single quotes ( &#039; ) undecoded.
+				// PHP 8.0 以前はデフォルトフラグ（ ENT_COMPAT ）ではシングルクォート（ &#039; ）が復元されないため、ENT_QUOTES と UTF-8 を明示する。
 				if ( false != $redirect && $this->candidate_post_type() ) {
-					wp_redirect( html_entity_decode( esc_url( $redirect ) ) );
+					wp_redirect( html_entity_decode( esc_url( $redirect ), ENT_QUOTES, 'UTF-8' ) );
 					exit;
 				}
 			}
@@ -191,12 +284,12 @@ if ( ! class_exists( 'VK_Link_Target_Controller' ) ) {
 					esc_html_x( 'Link Target Controller', 'admin menu link label', 'vk-link-target-controller' ),
 					$this->user_capability_settings,
 					'vk-ltc',
-					array( $this, 'settings_page_html' )
+					array( $this, 'add_custom_setting_page' )
 				);  // add link inside options menu and related settings page.
 
 				register_setting(
 					'vk-ltc-options',
-					'custom-post-types',
+					'vk_ltc_custom_post_types',
 					array( $this, 'sanitize_settings' )
 				); // create settings options in DB (use WordPress Settings API).
 			}
@@ -209,12 +302,13 @@ if ( ! class_exists( 'VK_Link_Target_Controller' ) ) {
 		 * @access public
 		 * @return void
 		 */
-		function settings_page_html() { ?>
+		function settings_page_html() {
+			?>
 
 			<div class="wrap" id="vk-link-target-controller">
 				<h2><?php echo esc_html_x( 'VK Link Target Controller', 'settings page title', 'vk-link-target-controller' ); ?></h2>
 
-				<div style="width:68%;display:inline-block;vertical-align:top;">
+				<div>
 					<form method="post" action="options.php">
 						<?php settings_fields( 'vk-ltc-options' ); // display nonce and other control hidden fields ?>
 						<table class="form-table">
@@ -227,11 +321,11 @@ if ( ! class_exists( 'VK_Link_Target_Controller' ) ) {
 									$post_types         = $this->get_public_post_types(); // array of post types to create a checkbox list
 									$post_types['page'] = __( 'Pages' );
 									foreach ( $post_types as $slug => $label ) {
-										$options_exist = $this->get_option();
+										$options_exist = $this->get_option() ? $this->get_option() : array();
 										$checked       = ( 0 != $options_exist && in_array( $slug, $options_exist ) ) ? 'checked="checked"' : '';
 										?>
-										<input type="checkbox" name="custom-post-types[]" id="custom-post-types-<?php echo $slug; ?>" value="<?php echo $slug; ?>" <?php echo $checked; ?> />
-										<label for="custom-post-types-<?php echo $slug; ?>"><?php echo $label; ?></label><br />
+										<input type="checkbox" name="vk_ltc_custom_post_types[]" id="vk_ltc_custom_post_types-<?php echo $slug; ?>" value="<?php echo $slug; ?>" <?php echo $checked; ?> />
+										<label for="vk_ltc_custom_post_types-<?php echo $slug; ?>"><?php echo $label; ?></label><br />
 																					<?php
 									}
 									?>
@@ -240,26 +334,6 @@ if ( ! class_exists( 'VK_Link_Target_Controller' ) ) {
 						</table>
 						<?php submit_button(); ?>
 					</form>
-				</div>
-
-				<!-- div for banner -->
-				<div style="width:29%;display:block; overflow:hidden;float:right;">
-				<?php if ( strtoupper( get_locale() ) == 'JA' ) : ?>
-					<a href="http://lightning.vektor-inc.co.jp/ja/" target="_blank">
-						<img style="max-width:100%;" src="<?php echo plugins_url( 'img/336_280_lightning.png', __FILE__ ); ?>" alt="WordPress Theme Lightning" />
-					</a>
-					<a href="http://ex-unit.vektor-inc.co.jp/ja/" target="_blank">
-						<img style="max-width:100%;" src="<?php echo plugins_url( 'img/336_280_ExUnit.png', __FILE__ ); ?>" alt="VK All in One Expansion Unit" />
-					</a>
-				<?php else : ?>
-
-					<a href="http://lightning.vektor-inc.co.jp/" target="_blank">
-						<img style="max-width:100%;" src="<?php echo plugins_url( 'img/lightning_bnr_en.jpg', __FILE__ ); ?>" alt="lightning_bnr_en" />
-					</a>
-					<a href="http://bizvektor.com/en/" target="_blank" title="<?php esc_html_e( 'Free WordPress theme for businesses', 'vk-link-target-controller' ); ?>">
-						<img style="max-width:100%;" src="<?php echo plugins_url( 'img/bizVektor-ad-banner-vert.jpg', __FILE__ ); ?>" alt="<?php esc_html_e( 'Download Biz Vektor free WordPress theme for businesses', 'vk-link-target-controller' ); ?>" />
-					</a>
-				<?php endif; ?>
 				</div>
 
 			</div>
@@ -299,16 +373,41 @@ if ( ! class_exists( 'VK_Link_Target_Controller' ) ) {
 		 * @return void
 		 */
 		function add_link_meta_box() {
-			if ( $this->candidate_post_type() ) {
+			if ( ! $this->candidate_post_type() ) {
+				return;
+			}
+
+			// In the block editor, hide the legacy meta box only when the React panel
+			// build exists. If the build is missing, fall back to the legacy meta box
+			// so the user can still edit link settings.
+			// ブロックエディタでは、Reactパネルのビルドが存在する場合のみ
+			// レガシーメタボックスを非表示にする。ビルドがない場合は
+			// フォールバックとしてレガシーメタボックスを表示する。
+			$screen     = get_current_screen();
+			$asset_file = plugin_dir_path( __FILE__ ) . 'build/index.asset.php';
+			if ( $screen && method_exists( $screen, 'is_block_editor' ) && $screen->is_block_editor() && file_exists( $asset_file ) ) {
 				add_meta_box(
-					'vk-ltc-url', // meta box html id.
+					'vk-ltc-url',
 					esc_html__( 'URL to redirect to', 'vk-link-target-controller' ),
 					array( $this, 'render_meta_box' ),
 					null,
 					'normal',
-					'high'
+					'high',
+					array( '__back_compat_meta_box' => true )
 				);
+				return;
 			}
+
+			// Classic editor: register meta box without the flag.
+			// クラシックエディタ：フラグなしでメタボックスを登録
+			add_meta_box(
+				'vk-ltc-url',
+				esc_html__( 'URL to redirect to', 'vk-link-target-controller' ),
+				array( $this, 'render_meta_box' ),
+				null,
+				'normal',
+				'high'
+			);
 		}
 
 		/**
@@ -339,7 +438,8 @@ if ( ! class_exists( 'VK_Link_Target_Controller' ) ) {
 			<p>
 				<label style="display:inline-block;width:150px;" for="vk-ltc-link-field"><?php esc_html_e( 'URL', 'vk-link-target-controller' ); ?></label>
 				<input type="text" id="vk-ltc-link-field" name="vk-ltc-link-field" value="<?php echo esc_url( urldecode( $link ) ); ?>" size="35" />
-				<button id="media_vk-ltc-link-field" class="media_btn button button-default"><?php _e( 'File Link', 'vk-link-target-controller' ); ?></button>
+				<button type="button" class="vk-ltc-link-search-btn button button-default"><?php esc_html_e( 'Search internal link', 'vk-link-target-controller' ); ?></button>
+				<button id="media_vk-ltc-link-field" class="media_btn button button-default"><?php esc_html_e( 'File Link', 'vk-link-target-controller' ); ?></button>
 			</p>
 
 <script type="text/javascript">
@@ -409,7 +509,7 @@ jQuery(document).ready(function($){
 			} else {
 				// check form.
 				if ( isset( $_POST['vk-ltc-link-field'] )
-					&& wp_verify_nonce( $_POST['vk-ltc-link-nonce'], 'vk-ltc-link' ) ) {
+					&& wp_verify_nonce( $_POST['vk-ltc-link-nonce'] ?? '', 'vk-ltc-link' ) ) {
 
 					// link field.
 					if ( isset( $_POST['vk-ltc-link-field'] ) ) {
@@ -444,27 +544,48 @@ jQuery(document).ready(function($){
 		 * Rewrite the link that the the_permalink() function prints out
 		 *
 		 * @access public
-		 * @param int $id The ID of the post.
+		 * @param int $post_id The ID of the post.
 		 * @return string
 		 */
-		function rewrite_link( $id = 0 ) {
-
-			if ( 0 == $id ) {
-				global $post; // use $post object.
-				$id = $post->ID; // id of current post.
-			}
+		function rewrite_link( $post_id = 0 ) {
 
 			$modified_url = '';
 
-			$link   = get_post_meta( $id, 'vk-ltc-link', true );
-			$target = get_post_meta( $id, 'vk-ltc-target', true );
+			$link   = get_post_meta( $post_id, 'vk-ltc-link', true );
+			$target = get_post_meta( $post_id, 'vk-ltc-target', true );
 
 			if ( empty( $link ) ) {
-				$modified_url = get_permalink( $id );
-			} elseif ( strpos( $link, '.' ) ) {
-				$modified_url = esc_url( $link ); // complete url (extern url).
+				$modified_url = get_permalink( $post_id );
+			} elseif ( 0 === strpos( $link, 'http://' ) || 0 === strpos( $link, 'https://' ) ) {
+				$modified_url = esc_url( $link ); // absolute url (external or internal full URL).
 			} else {
-				$modified_url = esc_url( home_url() . $link ); // partial url (internal url).
+				// relative path (internal): ensure single leading slash for home_url().
+				$path         = '/' . ltrim( $link, '/' );
+				$modified_url = esc_url( home_url( $path ) );
+			}
+			return $modified_url;
+		}
+
+		/**
+		 * rewrite_link_filter function
+		 * Wrapper function with the_permalink filter
+		 * call rewrite_link for rewriting link
+		 *
+		 * @access public
+		 * @param string      $orig_link Original permalink URL.
+		 * @param int|WP_Post $post Post ID, WP_Post object, or 0. Default 0.
+		 * @return string
+		 */
+		function rewrite_link_filter( $orig_link, $post = 0 ) {
+			$modified_url = ''; // No need to esc_url(), it's done in rewrite_link().
+			if ( isset( $post->ID ) ) {
+				$modified_url = $this->rewrite_link( $post->ID );
+			}
+
+			if ( empty( $modified_url ) ) {
+				// Rewrite failed ? Invalid $post ?
+				// Back to $orig_link
+				$modified_url = $orig_link;
 			}
 			return $modified_url;
 		}
@@ -535,13 +656,38 @@ jQuery(document).ready(function($){
 		}
 
 		/**
-		 * default option
+		 * Get the saved option for enabled post types.
+		 * 有効な投稿タイプのオプション値を取得する。
+		 *
+		 * @access public
+		 * @return array Array of enabled post type slugs.
 		 */
 		function get_option() {
 			$post_types         = $this->get_public_post_types(); // array of post types to create a checkbox list
 			$post_types['page'] = __( 'Pages' );
 			$post_types_slugs   = array_keys( $post_types );
-			return get_option( 'custom-post-types', $post_types_slugs );
+
+			// Use a sentinel value to distinguish "option not found" from a falsy stored value.
+			// センチネル値を使って「オプションが存在しない」と「falsy な保存値」を区別する。
+			$sentinel = 'vk_ltc_option_not_found';
+
+			// First, try the new option key.
+			// まず新しいオプションキーを試す。
+			$options = get_option( 'vk_ltc_custom_post_types', $sentinel );
+			if ( $sentinel !== $options ) {
+				return $options;
+			}
+
+			// Fall back to the legacy option key for environments where admin_init migration has not yet run.
+			// admin_init の移行処理がまだ実行されていない環境のために、旧オプションキーにフォールバックする。
+			$legacy_options = get_option( 'custom-post-types', $sentinel );
+			if ( $sentinel !== $legacy_options ) {
+				return $legacy_options;
+			}
+
+			// If neither key exists, return all public post type slugs as the default.
+			// どちらのキーも存在しない場合は、全公開投稿タイプのスラッグをデフォルトとして返す。
+			return $post_types_slugs;
 		}
 
 		/**
@@ -572,7 +718,9 @@ jQuery(document).ready(function($){
 		function candidate_post_type() {
 			$candidates   = $this->get_option();// post types where the meta box shows
 			$current_post = get_post(); // object of the post being modified
-
+			if ( ! $current_post ) {
+				return false;
+			}
 			if ( ! empty( $candidates ) ) {
 				if ( in_array( $current_post->post_type, $candidates ) ) {
 					return true;
@@ -580,6 +728,78 @@ jQuery(document).ready(function($){
 					return false;
 				}
 			}
+		}
+
+		/**
+		 * Check if the current admin screen is one where the meta box is shown.
+		 * Used for admin_enqueue_scripts when get_post() may not be available (e.g. post-new.php).
+		 *
+		 * @access public
+		 * @return bool
+		 */
+		function is_meta_box_screen() {
+			$screen = get_current_screen();
+			if ( ! $screen || 'post' !== $screen->base ) {
+				return false;
+			}
+			$post_type    = isset( $screen->post_type ) ? $screen->post_type : 'post';
+			$candidates   = $this->get_option();
+			return ! empty( $candidates ) && in_array( $post_type, $candidates, true );
+		}
+
+		/**
+		 * Enqueue the block editor React panel script.
+		 * ブロックエディタ用Reactパネルスクリプトをエンキューする。
+		 *
+		 * @access public
+		 * @return void
+		 */
+		function enqueue_block_editor_assets() {
+			if ( ! $this->is_meta_box_screen() ) {
+				return;
+			}
+
+			$asset_file = plugin_dir_path( __FILE__ ) . 'build/index.asset.php';
+			if ( ! file_exists( $asset_file ) ) {
+				return;
+			}
+
+			$asset = include $asset_file;
+
+			// Add dependencies for wp.media() and wpLink dialog.
+			// メディアアップローダーの wp.media() と wpLink ダイアログに必要な依存を追加
+			$dependencies   = $asset['dependencies'];
+			$dependencies[] = 'media-upload';
+			$dependencies[] = 'wp-media-utils';
+			$dependencies[] = 'wplink';
+
+			wp_enqueue_script(
+				'vk-ltc-block-editor',
+				plugins_url( 'build/index.js', __FILE__ ),
+				$dependencies,
+				$asset['version'],
+				true
+			);
+
+			// Pass enabled post types to JS / 有効な投稿タイプをJSに渡す
+			// array_values() ensures a numeric-indexed array for JS includes().
+			// array_values() でJSの includes() に適した数値インデックス配列にする。
+			$post_types = $this->get_option();
+			if ( ! is_array( $post_types ) ) {
+				$post_types = array();
+			}
+			wp_localize_script(
+				'vk-ltc-block-editor',
+				'vkLtcEditor',
+				array( 'postTypes' => array_values( $post_types ) )
+			);
+
+			// Set script translations / 翻訳ファイルを設定
+			wp_set_script_translations(
+				'vk-ltc-block-editor',
+				'vk-link-target-controller',
+				plugin_dir_path( __FILE__ ) . 'languages'
+			);
 		}
 
 		/**
@@ -602,18 +822,35 @@ jQuery(document).ready(function($){
 				'posts_per_page' => -1,
 				'paged'          => 0,
 				'post_type'      => $post_types_slugs,
-				'meta_key'       => 'vk-ltc-target',
-				'meta_value'     => 1,
+				'post_status'    => 'publish',
+				'meta_key'       => 'vk-ltc-link',
 			);
 			$query = new WP_Query( $args );
 
-			// create an array( 'id' => 'link' ) of ids from the posts found in the query.
+			// create array( 'id' => object ) of ids from the posts found in the query.
 			if ( $query->found_posts > 0 ) {
 				$matching_posts = $query->posts;
 				foreach ( $matching_posts as $post ) {
-					$ids[ $post->ID ][] = html_entity_decode( $this->rewrite_link( $post->ID ) );
-					$ids[ $post->ID ][] = get_permalink( $post->ID );
-					$ids[ $post->ID ]   = array_unique( $ids[ $post->ID ] );
+					$link   = get_post_meta( $post->ID, 'vk-ltc-link', true );
+					$target = get_post_meta( $post->ID, 'vk-ltc-target', true );
+
+					// リダイレクト先のURLが空でない場合のみ情報を追加
+					if ( ! empty( $link ) ) {
+						// rewrite_link() は表示用に esc_url() でエンティティ化されているため、
+						// JSON経由でJavaScriptへ渡しhrefへ直接設定する際は html_entity_decode() で復元する。
+						// Specify ENT_QUOTES and UTF-8 explicitly because on PHP 8.0 or earlier the default flags ( ENT_COMPAT ) leave single quotes ( &#039; ) undecoded.
+						// PHP 8.0 以前はデフォルトフラグ（ ENT_COMPAT ）ではシングルクォート（ &#039; ）が復元されないため、ENT_QUOTES と UTF-8 を明示する。
+						$redirect_url = html_entity_decode( $this->rewrite_link( $post->ID ), ENT_QUOTES, 'UTF-8' );
+						// ログイン済みかつ編集権限がある場合のみ編集URLを含める。
+						// get_edit_post_link() はコンテキスト '' で raw URL を返す（JSON用）。
+						// 権限がないユーザーには空文字列が返る。
+						$ids[ $post->ID ] = array(
+							're' => $redirect_url,
+							'pl' => get_permalink( $post->ID ),
+							'tg' => (int) $target,
+							'el' => (string) get_edit_post_link( $post->ID, '' ),
+						);
+					}
 				}
 			}
 
@@ -623,7 +860,9 @@ jQuery(document).ready(function($){
 			// Send data to the front.
 			header( 'Content-Type: application/json' );
 			echo $json_ids;
-			exit;
+			// wp_die() (not a raw exit) so that WP_Ajax_UnitTestCase can intercept
+			// termination and make this handler unit-testable.
+			wp_die();
 		}
 	}
 
@@ -643,3 +882,46 @@ if ( isset( $vk_link_target_controller ) ) {
 	add_action( 'admin_menu', array( $vk_link_target_controller, 'create_settings_page' ) );
 	add_action( 'plugins_loaded', array( $vk_link_target_controller, 'translation' ) );
 }
+
+/**
+ * Migrate the option key from 'custom-post-types' to 'vk_ltc_custom_post_types'.
+ * オプションキーを 'custom-post-types' から 'vk_ltc_custom_post_types' に移行する。
+ *
+ * Runs on admin_init to handle existing installations.
+ * 既存インストールに対応するため admin_init で実行する。
+ * Only migrates if the old key exists in the database; once migrated, the old key
+ * is deleted so this check has no ongoing performance cost.
+ * 旧キーがデータベースに存在する場合のみ移行する。移行後は旧キーを削除するため、
+ * 以降のパフォーマンスコストはない。
+ *
+ * @return void
+ */
+function vk_ltc_migrate_option_key() {
+	$old_key   = 'custom-post-types';
+	$new_key   = 'vk_ltc_custom_post_types';
+	$sentinel  = 'vk_ltc_option_not_found';
+
+	// Check if the old option key exists in the database.
+	// Use a unique sentinel value to distinguish "key not found" from a stored value.
+	// 旧オプションキーがデータベースに存在するか確認する。
+	// ユニークなセンチネル値を使い、「キーが見つからない」と「保存された値」を区別する。
+	$old_value = get_option( $old_key, $sentinel );
+
+	// If the old key does not exist, no migration is needed.
+	// 旧キーが存在しない場合、移行は不要。
+	if ( $sentinel === $old_value ) {
+		return;
+	}
+
+	// Only migrate if the new key does not already have a value.
+	// 新キーにまだ値が設定されていない場合のみ移行する。
+	$new_value = get_option( $new_key, $sentinel );
+	if ( $sentinel === $new_value ) {
+		update_option( $new_key, $old_value );
+	}
+
+	// Delete the old option key after migration.
+	// 移行後に旧オプションキーを削除する。
+	delete_option( $old_key );
+}
+add_action( 'admin_init', 'vk_ltc_migrate_option_key' );

@@ -20,7 +20,9 @@
  * @property {boolean} wsEditorData.showExtraIcons
  * @property {boolean} wsEditorData.dashiconsAvailable
  * @property {string}  wsEditorData.submenuIconsEnabled
- * @property {Object}  wsEditorData.showHints
+ *
+ * @property {Object} wsEditorData.showHints
+ * @property {string} wsEditorData.hideHintNonce
  *
  * @property {string} wsEditorData.hideAdvancedSettingsNonce
  * @property {string} wsEditorData.getPagesNonce
@@ -48,6 +50,10 @@
  *
  * @property {string} wsEditorData.setTestConfigurationNonce
  * @property {string} wsEditorData.testAccessNonce
+ *
+ * @property {string|null} wsEditorData.deepNestingEnabled
+ *
+ * @property {object} wsEditorData.auxDataConfig
  *
  * @property {boolean} wsEditorData.isDemoMode
  * @property {boolean} wsEditorData.isMasterMode
@@ -151,6 +157,8 @@ window.AmeEditorApi = AmeEditorApi;
 
 var actorSelectorWidget = new AmeActorSelector(AmeActors, wsEditorData.wsMenuEditorPro);
 
+AmeEditorApi.actorSelectorWidget = actorSelectorWidget;
+
 var itemTemplates = {
 	templates: wsEditorData.itemTemplates,
 
@@ -188,6 +196,11 @@ var itemTemplates = {
 		return (this.getDefaultValue(templateId, fieldName) !== null);
 	}
 };
+
+	/**
+	 * @type {AmeMenuPresenter}
+	 */
+	let menuPresenter;
 
 /**
  * Set an input field to a value. The only difference from jQuery.val() is that
@@ -236,27 +249,28 @@ function randomMenuId(prefix, size){
 
     return prefix + suffix;
 }
+AmeEditorApi.randomMenuId = randomMenuId;
 
 function outputWpMenu(menu){
-	var menuCopy = $.extend(true, {}, menu);
-	var menuBox = $('#ws_menu_box');
+	const menuCopy = $.extend(true, {}, menu);
 
 	//Remove the current menu data
-	menuBox.empty();
-	$('#ws_submenu_box').empty();
+	menuPresenter.clear();
 
 	//Display the new menu
-	var i = 0;
-	for (var filename in menuCopy){
+	const firstColumn = menuPresenter.getColumnImmediate(1);
+	const itemList = firstColumn.getVisibleItemList();
+	for (let filename in menuCopy){
 		if (!menuCopy.hasOwnProperty(filename)){
 			continue;
 		}
-		outputTopMenu(menuCopy[filename]);
-		i++;
+		firstColumn.outputItem(menuCopy[filename], null, itemList);
 	}
 
 	//Automatically select the first top-level menu
-	menuBox.find('.ws_menu:first').click();
+	if (itemList) {
+		itemList.find('.ws_menu:first').trigger('click');
+	}
 }
 
 /**
@@ -304,7 +318,753 @@ function loadMenuConfiguration(adminMenu) {
 
 	//Display the new admin menu.
 	outputWpMenu(adminMenu.tree);
+
+	$(document).trigger('menuConfigurationLoaded.adminMenuEditor', adminMenu);
 }
+
+	/**
+	 * Check if it's possible to delete a menu item.
+	 *
+	 * @param {JQuery} containerNode
+	 * @returns {boolean}
+	 */
+	function canDeleteItem(containerNode) {
+		if (!containerNode || (containerNode.length < 1)) {
+			return false;
+		}
+
+		var menuItem = containerNode.data('menu_item');
+		var isDefaultItem =
+			( menuItem.template_id !== '')
+			&& ( menuItem.template_id !== wsEditorData.unclickableTemplateId)
+			&& ( menuItem.template_id !== wsEditorData.embeddedPageTemplateId)
+			&& (!menuItem.separator);
+
+		var otherCopiesExist = false;
+		if (isDefaultItem) {
+			//Check if there are any other menus with the same template ID.
+			$('#ws_menu_editor').find('.ws_container').each(function() {
+				var otherItem = $(this).data('menu_item');
+				if ((menuItem !== otherItem) && (menuItem.template_id === otherItem.template_id)) {
+					otherCopiesExist = true;
+					return false;
+				}
+				return true;
+			});
+		}
+
+		return (!isDefaultItem || otherCopiesExist);
+	}
+
+	/**
+	 * Get or create the submenu container of a menu item.
+	 *
+	 * @param {JQuery|null} container
+	 * @param {AmeEditorColumn} [nextColumn]
+	 * @return {JQuery|null}
+	 */
+	function getSubmenuOf(container, nextColumn) {
+		if (!container || (container.length < 1)) {
+			return null;
+		}
+
+		const submenuId = container.data('submenu_id');
+		if (submenuId) {
+			let $submenu = $('#' + submenuId).first();
+			if ($submenu.length > 0) {
+				return $submenu;
+			}
+		}
+
+		//If a submenu doesn't exist yet, create it in the next column.
+		if (nextColumn) {
+			return createSubmenuFor(container, nextColumn);
+		} else {
+			return null;
+		}
+	}
+
+	/**
+	 * Create a submenu container for a menu item.
+	 * @param {JQuery} container
+	 * @param {AmeEditorColumn} nextColumn
+	 * @return {JQuery}
+	 */
+	function createSubmenuFor(container, nextColumn) {
+		const $submenu = nextColumn.buildSubmenuContainer(container.attr('id'));
+		nextColumn.appendSubmenuContainer($submenu);
+		container.data('submenu_id', $submenu.attr('id'))
+		return $submenu;
+	}
+
+	/**
+	 * @param {Number} level
+	 * @param {JQuery|null} predecessor
+	 * @param {JQuery|null} [container]
+	 * @param {Function} [getNextColumn]
+	 * @constructor
+	 */
+	function AmeEditorColumn(level, predecessor, container, getNextColumn) {
+		const self = this;
+
+		this.level = level;
+		this.usesSubmenuContainers = (this.level > 1);
+
+		if ((typeof container === 'undefined') || (container === null)) {
+			container = $('#ame-submenu-column-template').first().clone();
+			container.attr('id', '');
+			container.find('.ws_box').first().attr('id', '');
+			container.show().insertAfter(predecessor);
+		}
+		container.data('ame-menu-level', level);
+		container.addClass('ame-editor-column-' + level);
+
+		this.container = container;
+		this.menuBox = container.find('.ws_box').first();
+		this.dropZone = container.children('.ws_dropzone').first();
+		this.visibleItemList = null;
+
+		if (!this.usesSubmenuContainers) {
+			this.menuBox.addClass('ame-visible-item-list');
+		}
+
+		if (typeof getNextColumn !== 'undefined') {
+			this.getNextColumn = getNextColumn;
+		} else {
+			this.getNextColumn = function(callback) {
+				callback(null);
+			};
+		}
+
+		this.container.children('.ws_toolbar').on('click', '.ws_button', function() {
+			const $button = $(this);
+			let buttonAction = $button.data('ame-button-action') || 'unknown';
+			let selectedItem = self.getSelectedItem();
+			self.container.trigger(
+				'adminMenuEditor:action-' + buttonAction,
+				[(selectedItem.length > 0) ? selectedItem : null, self, $button]
+			);
+			return false;
+		});
+	}
+
+	/**
+	 * Create editor widgets for a menu item and its submenus.
+	 *
+	 * @param {Object} itemData An object containing menu data.
+	 * @param {JQuery|null|number} [insertPosition] Insert the widget after this node. If it's NULL, the widget
+	 *  will be added to the end fo the list. If it's -1, the widget will be added to the beginning.
+	 * @param {JQuery} [itemList] The container where to insert the widget. Defaults to the currently
+	 *  visible item list. For columns that don't use submenu containers, it's always the menuBox.
+	 * @return {Object} Object with two fields - 'menu' and 'submenu' - containing the jQuery objects
+	 *  of the created widgets.
+	 */
+	AmeEditorColumn.prototype.outputItem = function(itemData, insertPosition, itemList) {
+		if (!itemList) {
+			itemList = this.getVisibleItemList();
+		}
+		const self = this;
+
+		//Create the menu widget
+		const isTopLevel = this.level <= 1;
+		const $item = buildMenuItem(itemData, isTopLevel);
+
+		if (typeof insertPosition === 'undefined') {
+			insertPosition = null;
+		}
+		if (insertPosition === null) {
+			$item.appendTo(itemList);
+		} else if (insertPosition === -1) {
+			$item.prependTo(itemList);
+		} else {
+			//phpcs:ignore WordPressVIPMinimum.JS.HTMLExecutingFunctions -- buildMenuItem() should be safe.
+			$(insertPosition).after($item);
+		}
+
+		const children = (typeof itemData.items !== 'undefined') ? itemData.items : [];
+		const hasChildren = !_.isEmpty(children);
+		let $submenu = null;
+
+		this.getNextColumn(
+			/**
+			 * @param {AmeEditorColumn|null} nextColumn
+			 */
+			function (nextColumn) {
+				if (nextColumn) {
+					//Create a submenu container even if this item doesn't have children.
+					//The user could add submenu items later.
+					$submenu = createSubmenuFor($item, nextColumn);
+
+					//Output children.
+					if (hasChildren) {
+						$.each(children, function (index, item) {
+							nextColumn.outputItem(item, null, $submenu);
+						});
+					}
+				} else {
+					//TODO: This branch could be optimized by letting the recursive outputItem call know that there is no next column.
+					//There is no next column, so any submenu items that belong to this item will be
+					//displayed in the same column, below the item.
+					if (hasChildren) {
+						let $previousItem = $item;
+						$.each(children, function (index, child) {
+							const result = self.outputItem(child, $previousItem, itemList);
+							if (result && result.menu) {
+								$previousItem = result.menu;
+							}
+						});
+					}
+				}
+
+				//Note: Update the menu only after its children are ready. It needs the submenu items to decide
+				//whether to display the access checkbox as checked or indeterminate.
+				updateItemEditor($item);
+			},
+			hasChildren
+		);
+
+		//Note that $submenu could still be NULL at this point if the "get next column" callback
+		//is called asynchronously.
+		return {
+			'menu': $item,
+			'submenu': $submenu
+		};
+	};
+
+	/**
+	 * Paste a menu item in this column.
+	 *
+	 * @param {Object} item
+	 * @param {JQuery|null|number} [insertPosition] Defaults to inserting the item below the current selection.
+	 *  Set to NULL to paste at the end of the list, or -1 to paste at the beginning.
+	 * @param {JQuery} [itemList]
+	 */
+	AmeEditorColumn.prototype.pasteItem = function (item, insertPosition, itemList) {
+		if (typeof insertPosition === 'undefined') {
+			insertPosition = this.getSelectedItem();
+			if (insertPosition.length < 1) {
+				insertPosition = null;
+			}
+		}
+
+		if (!itemList) {
+			itemList = this.getVisibleItemList();
+		}
+
+		//The user shouldn't need to worry about giving separators a unique filename.
+		if (item.separator) {
+			item.defaults.file = randomMenuId('separator_');
+		}
+
+		//If we're pasting from a sub-menu into the top level, we may need to fix some properties
+		//that are blank for sub-menu items but required for top level menus.
+		const isTopLevel = this.level <= 1;
+		if (isTopLevel) {
+			function isNonEmptyString(value) {
+				return (typeof value === 'string') && (value !== '');
+			}
+
+			if (!isNonEmptyString(getFieldValue(item, 'css_class', ''))) {
+				item.css_class = 'menu-top';
+			}
+			if (!isNonEmptyString(getFieldValue(item, 'icon_url', ''))) {
+				item.icon_url = 'dashicons-admin-generic';
+			}
+			if (!isNonEmptyString(getFieldValue(item, 'hookname', ''))) {
+				item.hookname = randomMenuId();
+			}
+		}
+
+		const result = this.outputItem(item, insertPosition, itemList);
+
+		if (this.level > 1) {
+			updateParentAccessUi(itemList);
+		}
+
+		return result;
+	};
+
+	/**
+	 * @return {JQuery|null}
+	 */
+	AmeEditorColumn.prototype.getVisibleItemList = function() {
+		if (this.usesSubmenuContainers) {
+			if (this.visibleItemList) {
+				return this.visibleItemList;
+			}
+
+			const $list = this.menuBox.children('.ws_submenu:visible').first().addClass('ame-visible-item-list');
+			if ($list && ($list.length > 0)) {
+				this.visibleItemList = $list;
+			}
+			return $list;
+		} else {
+			return this.menuBox;
+		}
+	};
+
+	/**
+	 * @param {JQuery|null} $submenu
+	 */
+	AmeEditorColumn.prototype.setVisibleItemList = function($submenu) {
+		//Do nothing if the new list is the same as the old one.
+		if (($submenu === this.visibleItemList) || ($submenu && ($submenu.is(this.visibleItemList)))) {
+			return;
+		}
+
+		if (this.visibleItemList) {
+			this.visibleItemList.hide().removeClass('ame-visible-item-list');
+		}
+		this.visibleItemList = $submenu;
+
+		if (this.visibleItemList) {
+			this.visibleItemList.show().addClass('ame-visible-item-list');
+		}
+
+		//Each item list/submenu has its own own selected item, so switching to a different item list
+		//also effectively changes the selected item.
+		this.selectionHasChanged();
+	};
+
+	/**
+	 * @return {JQuery}
+	 */
+	AmeEditorColumn.prototype.getAllItemLists = function() {
+		if (this.usesSubmenuContainers) {
+			return this.menuBox.children('.ws_submenu');
+		}
+		return this.menuBox;
+	};
+
+	/**
+	 * @return {JQuery}
+	 */
+	AmeEditorColumn.prototype.getSelectedItem = function() {
+		const list = this.getVisibleItemList();
+		if (list && (list.length > 0)) {
+			return list.children('.ws_active').first();
+		}
+		return $([]);
+	};
+
+	/**
+	 * @param {JQuery} container
+	 */
+	AmeEditorColumn.prototype.selectItem = function(container) {
+		if (container.hasClass('ws_active')) {
+			//The menu item is already selected.
+			return;
+		}
+
+		//Highlight the active item and un-highlight the previous one
+		container.addClass('ws_active');
+		container.siblings('.ws_active').removeClass('ws_active');
+
+		this.selectionHasChanged(container);
+	};
+
+	/**
+	 * @param {JQuery|null} [$item]
+	 */
+	AmeEditorColumn.prototype.selectionHasChanged = function($item) {
+		if (typeof $item === 'undefined') {
+			$item = this.getSelectedItem();
+		}
+		if (!$item || ($item.length < 1)) {
+			$item = null;
+		}
+
+		//Make the "delete" button appear disabled if you can't delete this item.
+		this.container.find('.ws_toolbar .ws_delete_menu_button')
+			.toggleClass('ws_button_disabled', !canDeleteItem($item))
+
+		const self = this;
+		this.getNextColumn(function(nextColumn) {
+			if (nextColumn) {
+				nextColumn.setVisibleItemList(getSubmenuOf($item, nextColumn));
+				if ($item) {
+					self.updateSubmenuBoxHeight($item, nextColumn);
+				}
+			}
+		}, false);
+	};
+
+	/**
+	 * @param {JQuery} selectedMenu
+	 * @param {AmeEditorColumn} nextColumn
+	 */
+	AmeEditorColumn.prototype.updateSubmenuBoxHeight = function updateSubmenuBoxHeight(selectedMenu, nextColumn) {
+		if (!nextColumn || (nextColumn === this)) {
+			return;
+		}
+		let mainMenuBox = this.menuBox,
+			submenuBox = nextColumn.menuBox,
+			submenuDropZone = nextColumn.dropZone;
+
+		//Make the submenu box tall enough to reach the selected item.
+		//This prevents the menu tip (if any) from floating in empty space.
+		if (selectedMenu.hasClass('ws_menu_separator')) {
+			submenuBox.css('min-height', '');
+		} else {
+			var menuTipHeight = 30,
+				empiricalExtraHeight = 4,
+				verticalBoxOffset = (submenuBox.offset().top - mainMenuBox.offset().top),
+				minSubmenuHeight = (selectedMenu.offset().top - mainMenuBox.offset().top)
+					- verticalBoxOffset
+					+ menuTipHeight - (submenuDropZone.outerHeight() || 0) + empiricalExtraHeight;
+			minSubmenuHeight = Math.max(minSubmenuHeight, 0);
+			submenuBox.css('min-height', minSubmenuHeight);
+		}
+	}
+
+	AmeEditorColumn.prototype.buildSubmenuContainer = function(parentMenuId) {
+		//Create a container for menu items.
+		const submenu = $('<div class="ws_submenu" style="display:none;"></div>');
+		submenu.attr('id', 'ws-submenu-'+(wsIdCounter++));
+
+		if (parentMenuId) {
+			submenu.data('parent_menu_id', parentMenuId);
+		}
+
+		//Make the submenu sortable
+		makeBoxSortable(submenu);
+
+		return submenu;
+	};
+
+	AmeEditorColumn.prototype.appendSubmenuContainer = function($submenu) {
+		this.usesSubmenuContainers = true;
+		$submenu.appendTo(this.menuBox);
+	};
+
+	/**
+	 * Delete a menu item and all of its children.
+	 *
+	 * @param {JQuery} container
+	 */
+	AmeEditorColumn.prototype.destroyItem = function(container) {
+		const wasSelected = container.is('.ws_active');
+
+		//Recursively destroy any submenu items.
+		const submenuId = container.data('submenu_id');
+		if (submenuId) {
+			const self = this;
+			const $submenu = $('#' + submenuId);
+			$submenu.children('.ws_container').each(function() {
+				self.destroyItem($(this));
+			});
+			$submenu.remove();
+		}
+
+		//Destroy the item itself.
+		container.remove();
+
+		if (wasSelected) {
+			this.selectionHasChanged();
+		}
+	};
+
+	/**
+	 * Check if this column can accept a menu item that's being dragged/moved to it.
+	 *
+	 * @param {JQuery} $itemNode
+	 * @returns {boolean}
+	 */
+	AmeEditorColumn.prototype.canAcceptItem = function($itemNode) {
+		const visibleSubmenu = this.getVisibleItemList();
+		if (!visibleSubmenu || (visibleSubmenu.length < 1)) {
+			return false; //Can't move anything to a non-existent submenu.
+		}
+
+		return (
+			//It must actually be a menu item.
+			$itemNode.hasClass('ws_container')
+
+			//Prevent users from dropping a parent menu on one of its own sub-menus.
+			&& !isParentMenuNodeOf($itemNode, visibleSubmenu)
+		);
+	}
+
+	/**
+	 * Remove all items and item lists from this column.
+	 *
+	 * Note: Does not remove item submenus that are in other columns.
+	 */
+	AmeEditorColumn.prototype.reset = function() {
+		this.menuBox.empty();
+		this.visibleItemList = null;
+		this.selectionHasChanged(null);
+	};
+
+	/**
+	 *
+	 * @param {JQuery} editorNode
+	 * @param {Boolean|null|string} [deepNestingEnabled]
+	 * @param {Number} [maxLevels]
+	 * @param {Number} [initialLevels]
+	 * @constructor
+	 */
+	function AmeMenuPresenter(editorNode, deepNestingEnabled, maxLevels, initialLevels ) {
+		const self = this;
+		this.editorNode = editorNode;
+
+		if (typeof deepNestingEnabled === 'string') {
+			deepNestingEnabled = (deepNestingEnabled === '1');
+		}
+		this.isDeepNestingEnabled = (typeof deepNestingEnabled !== 'undefined') ? deepNestingEnabled : null;
+		this.nestingQueryPromise = null;
+
+		if (typeof maxLevels === 'undefined') {
+			maxLevels = 3;
+		}
+		if (typeof initialLevels === 'undefined') {
+			if (this.isDeepNestingEnabled) {
+				//If additional levels are enabled, show the maximum number of levels.
+				initialLevels = maxLevels;
+			} else {
+				//WordPress only supports up to two levels by default.
+				initialLevels = Math.min(maxLevels, 2);
+			}
+		}
+		if (initialLevels > this.maxLevels) {
+			initialLevels = this.maxLevels;
+		}
+
+		this.maxLevels = maxLevels;
+
+		const $topLevelContainer = this.editorNode.find('#ws_menu_box').first().closest('.ws_main_container');
+		this.columns = [
+			//Empty zeroth column.
+			new AmeEditorColumn(0, null, $()),
+			//The first column contains top level menus.
+			new AmeEditorColumn(1, null, $topLevelContainer, makeNextColumnGetter(1))
+		];
+		this.currentLevels = this.columns.length - 1;
+
+		function makeNextColumnGetter(ownLevel) {
+			if (ownLevel >= self.maxLevels) {
+				//This column will never have a next column, so we can just use NULL.
+				return function(callback) {
+					callback(null);
+				};
+			}
+			return function(callback, createIfNotExists) {
+				self.getColumn(ownLevel + 1, callback, createIfNotExists);
+			};
+		}
+
+		/**
+		 * @param {Number} level
+		 * @return {AmeEditorColumn}
+		 */
+		function createColumn(level) {
+			if (level > self.maxLevels) {
+				throw new Error('Cannot exceed maximum nesting level: ' + self.maxLevels);
+			}
+			if (typeof self.columns[level] !== 'undefined') {
+				throw new Error('Cannot overwrite an existing column ' + level);
+			}
+
+			let predecessor;
+			if (typeof self.columns[level - 1] !== 'undefined') {
+				predecessor = self.columns[level - 1].container;
+			} else {
+				predecessor = self.columns[self.currentLevels].container;
+			}
+
+			let newColumn = new AmeEditorColumn(level, predecessor, null, makeNextColumnGetter(level));
+			self.columns.push(newColumn);
+
+			if (level > self.currentLevels) {
+				self.currentLevels = level;
+			}
+
+			return newColumn;
+		}
+
+		/**
+		 * Can we create another column?
+		 *
+		 * @param {Number} level
+		 * @param {Function} callback
+		 */
+		function queryCanCreateColumn(level, callback) {
+			if (
+				(level > self.maxLevels)                            //Do not exceed the maximum depth.
+				|| (typeof self.columns[level] !== 'undefined')     //Do not overwrite existing columns.
+			) {
+				callback(false);
+				return;
+			}
+
+			//WordPress core only supports two admin menu levels. We call anything beyond that "deep".
+			const isDeep = (level > 2);
+			if (!isDeep) {
+				callback(true);
+				return;
+			}
+			//Do we already know if we can create deeply nested menus?
+			if (self.isDeepNestingEnabled !== null) {
+				callback(self.isDeepNestingEnabled);
+				return;
+			}
+
+			//If we're already waiting for a decision, just add another callback to the queue.
+			if (self.nestingQueryPromise !== null) {
+				self.nestingQueryPromise.always(function() {
+					callback(self.isDeepNestingEnabled);
+				});
+				return;
+			}
+
+			//Let's allow other code/plugins to decide this. Scripts can add deferred objects or promises
+			//to an array. All deferred objects must resolve successfully to enable deep nesting.
+			let deferreds = [];
+			self.editorNode.trigger('adminMenuEditor:queryDeepNesting', [deferreds]);
+
+			if (deferreds.length > 0) {
+				self.nestingQueryPromise = $.when.apply($, deferreds)
+					.done(function() {
+						self.isDeepNestingEnabled = true;
+					})
+					.fail(function() {
+						self.isDeepNestingEnabled = false;
+					})
+					.always(function() {
+						callback(self.isDeepNestingEnabled);
+					});
+			} else {
+				//Deep nesting is disabled by default.
+				self.isDeepNestingEnabled = false;
+				callback(self.isDeepNestingEnabled);
+			}
+		}
+
+		/**
+		 * Get or create a column. The callback will be called with one argument: either the column object,
+		 * or NULL if the column does not exist and could not be created.
+		 *
+		 * @param {Number} level
+		 * @param {Function} callback
+		 * @param {Boolean} [createIfNotExists] Defaults to true.
+		 */
+		this.getColumn = function(level, callback, createIfNotExists) {
+			if (typeof this.columns[level] !== 'undefined') {
+				callback(this.columns[level]);
+				return;
+			}
+
+			if (typeof createIfNotExists === 'undefined') {
+				createIfNotExists = true;
+			}
+
+			if (createIfNotExists) {
+				queryCanCreateColumn(level, function (isAllowed) {
+					//It could be that another callback has already created the next column,
+					//so we need to check again if it exists.
+					if (typeof self.columns[level] !== 'undefined') {
+						callback(self.columns[level]);
+					} else if (isAllowed) {
+						callback(createColumn(level));
+					} else {
+						callback(null);
+					}
+				});
+			} else {
+				callback(null);
+			}
+		};
+
+		/**
+		 * Get or create a column. Like getColumn(), but it will default to not creating deeply nested
+		 * menu levels unless that feature is already enabled.
+		 *
+		 * @param {Number} level
+		 * @return {AmeEditorColumn|null}
+		 */
+		this.getColumnImmediate = function(level) {
+			if (typeof this.columns[level] !== 'undefined') {
+				return this.columns[level];
+			}
+			if (level > this.maxLevels) {
+				return null;
+			}
+
+			if ((level <= 2) || (this.isDeepNestingEnabled === true)) {
+				return createColumn(level);
+			}
+			return null;
+		};
+
+		/**
+		 * Get the column that contains a specific menu item or element.
+		 *
+		 * @param  {JQuery} container Menu item container, or another element that's inside a column.
+		 * @return {AmeEditorColumn|null}
+		 */
+		this.getItemColumn = function(container) {
+			if (!container) {
+				return null;
+			}
+			const level = container.closest('.ws_main_container').data('ame-menu-level');
+			if (typeof level === 'undefined') {
+				return null;
+			}
+			return this.getColumnImmediate(level);
+		};
+
+		/**
+		 * Create editor widgets for a menu item and its submenus and append them all to the DOM.
+		 *
+		 * @param {Number} level
+		 * @param {Object} itemData
+		 * @param {JQuery} [afterNode] Insert the widget after this node.
+		 */
+		this.outputMenuItem = function(level, itemData, afterNode) {
+			const column = this.getColumnImmediate(level);
+			return column.outputItem(itemData, afterNode);
+		}
+
+		/**
+		 * Select a menu item and show its submenu.
+		 *
+		 * @param {JQuery} container
+		 */
+		this.selectItem = function(container) {
+			const thisColumn = this.getColumnImmediate(container.closest('.ws_main_container').data('ame-menu-level'));
+			if (thisColumn) {
+				thisColumn.selectItem(container);
+			}
+		};
+
+		/**
+		 * Delete a menu item and all of its children.
+		 *
+		 * @param {JQuery} container
+		 */
+		this.destroyItem = function(container) {
+			const column = this.getItemColumn(container);
+			if (column) {
+				column.destroyItem(container);
+			}
+		};
+
+		/**
+		 * Delete all items and reset all columns.
+		 */
+		this.clear = function() {
+			for (let level = 0; level < this.columns.length; level++) {
+				if (typeof this.columns[level] !== 'undefined') {
+					this.columns[level].reset();
+				}
+			}
+		};
+
+		//Initialisation.
+		for (let level = this.currentLevels + 1; level <= initialLevels; level++) {
+			createColumn(level);
+		}
+	}
 
 /*
  * Create edit widgets for a top-level menu and its submenus and append them all to the DOM.
@@ -317,59 +1077,10 @@ function loadMenuConfiguration(adminMenu) {
  *	Object with two fields - 'menu' and 'submenu' - containing the DOM nodes of the created widgets.
  */
 function outputTopMenu(menu, afterNode){
-	//Create the menu widget
-	var menu_obj = buildMenuItem(menu, true);
-
-	if ( (typeof afterNode !== 'undefined') && (afterNode !== null) ){
-		$(afterNode).after(menu_obj);
-	} else {
-		menu_obj.appendTo('#ws_menu_box');
+	if (!menuPresenter) {
+		throw new Error('outputTopMenu cannot be called before the menu presenter has been initialised.');
 	}
-
-	//Create a container for menu items, even if there are none
-	var submenu = buildSubmenu(menu.items, menu_obj.attr('id'));
-	submenu.appendTo('#ws_submenu_box');
-	menu_obj.data('submenu_id', submenu.attr('id'));
-
-	//Note: Update the menu only after its children are ready. It needs the submenu items to decide whether to display
-	//the access checkbox as checked or indeterminate.
-	updateItemEditor(menu_obj);
-
-	return {
-		'menu' : menu_obj,
-		'submenu' : submenu
-	};
-}
-
-/*
- * Create and populate a submenu container.
- */
-function buildSubmenu(items, parentMenuId){
-	//Create a container for menu items, even if there are none
-	var submenu = $('<div class="ws_submenu" style="display:none;"></div>');
-	submenu.attr('id', 'ws-submenu-'+(wsIdCounter++));
-
-	if (parentMenuId) {
-		submenu.data('parent_menu_id', parentMenuId);
-	}
-
-	//Only show menus that have items.
-	//Skip arrays (with a length) because filled menus are encoded as custom objects.
-	var entry = null;
-	if (items) {
-		$.each(items, function(index, item) {
-			entry = buildMenuItem(item, false);
-			if ( entry ){
-				submenu.append(entry);
-				updateItemEditor(entry);
-			}
-		});
-	}
-
-	//Make the submenu sortable
-	makeBoxSortable(submenu);
-
-	return submenu;
+	return menuPresenter.outputMenuItem(1, menu, afterNode);
 }
 
 /**
@@ -381,6 +1092,7 @@ function buildSubmenu(items, parentMenuId){
  */
 function buildMenuItem(itemData, isTopLevel) {
 	isTopLevel = (typeof isTopLevel === 'undefined') ? false : isTopLevel;
+	const canHaveSubmenuItems = isTopLevel && !itemData.separator;
 
 	//Create the menu HTML
 	var item = $('<div></div>')
@@ -422,7 +1134,7 @@ function buildMenuItem(itemData, isTopLevel) {
 		setMenuFlag(item, flags[i], getFieldValue(itemData, flags[i], false));
 	}
 
-	if ( isTopLevel && !itemData.separator ){
+	if ( canHaveSubmenuItems ){
 		//Allow the user to drag menu items to top-level menus
 		item.droppable({
 			'hoverClass' : 'ws_menu_drop_hover',
@@ -432,22 +1144,32 @@ function buildMenuItem(itemData, isTopLevel) {
 			}),
 
 			'drop' : (function(event, ui){
-				var droppedItemData = readItemState(ui.draggable);
-				var new_item = buildMenuItem(droppedItemData, false);
-
-				var sourceSubmenu = ui.draggable.parent();
-				var submenu = $('#' + item.data('submenu_id'));
-				submenu.append(new_item);
-
-				if ( !event.ctrlKey ) {
-					ui.draggable.remove();
+				const column = menuPresenter.getItemColumn(item);
+				if (!column) {
+					return;
+				}
+				const nextColumn = menuPresenter.getColumnImmediate(column.level + 1);
+				const submenu = getSubmenuOf(item, nextColumn);
+				if (!submenu || !nextColumn) {
+					return;
 				}
 
-				updateItemEditor(new_item);
+				const droppedItemData = readItemState(ui.draggable);
+				const sourceSubmenu = ui.draggable.parent();
+
+				let result = nextColumn.outputItem(droppedItemData, null, submenu);
+
+				if ( !event.ctrlKey ) {
+					menuPresenter.destroyItem(ui.draggable);
+				}
+
+				updateItemEditor(result.menu);
 
 				//Moving an item can change aggregate menu permissions. Update the UI accordingly.
 				updateParentAccessUi(submenu);
-				updateParentAccessUi(sourceSubmenu);
+				if (sourceSubmenu) {
+					updateParentAccessUi(sourceSubmenu);
+				}
 			})
 		});
 	}
@@ -500,6 +1222,8 @@ function formatMenuTitle(title) {
 	return title;
 }
 
+AmeEditorApi.formatMenuTitle = formatMenuTitle;
+
 //Editor field spec template.
 var baseField = {
 	caption : '[No caption]',
@@ -525,12 +1249,12 @@ var knownMenuFields = {
 		caption : 'Menu title',
 		display: function(menuItem, displayValue, input, containerNode) {
 			//Update the header as well.
-			containerNode.find('.ws_item_title').html(formatMenuTitle(displayValue) + '&nbsp;');
+			containerNode.find('.ws_item_title').text(formatMenuTitle(displayValue) + '\xa0');
 			return displayValue;
 		},
 		write: function(menuItem, value, input, containerNode) {
 			menuItem.menu_title = value;
-			containerNode.find('.ws_item_title').html(stripAllTags(input.val()) + '&nbsp;');
+			containerNode.find('.ws_item_title').text(stripAllTags(input.val()) + '\xa0');
 		}
 	}),
 
@@ -615,13 +1339,9 @@ var knownMenuFields = {
 		caption: 'Embedded page ID',
 		defaultValue: 'Select page to display',
 		type: 'text',
-		visible: false, //Displayed on-demand.
 		addDropdown: 'ws_embedded_page_selector',
 
 		display: function(menuItem, displayValue, input) {
-			//Only show this field if the "Embed WP page" template is selected.
-			input.closest('.ws_edit_field').toggle(menuItem.template_id === wsEditorData.embeddedPageTemplateId);
-
 			input.prop('readonly', true);
 			var pageId = parseInt(getFieldValue(menuItem, 'embedded_page_id', 0), 10),
 				blogId = parseInt(getFieldValue(menuItem, 'embedded_page_blog_id', 1), 10),
@@ -654,6 +1374,11 @@ var knownMenuFields = {
 
 		write: function() {
 			//The user cannot directly edit this field. We deliberately ignore writes.
+		},
+
+		visible: function(menuItem) {
+			//Only show this field if the "Embed WP page" template is selected.
+			return (menuItem.template_id === wsEditorData.embeddedPageTemplateId);
 		}
 	}),
 
@@ -664,10 +1389,10 @@ var knownMenuFields = {
 			// field is usually set to a page slug or plugin filename for plugin/hook pages,
 			// we display the dynamically generated "url" field here (i.e. the actual URL) instead.
 			if (menuItem.template_id !== '') {
-				input.attr('readonly', 'readonly');
+				input.prop('readonly', true);
 				displayValue = itemTemplates.getDefaultValue(menuItem.template_id, 'url');
 			} else {
-				input.removeAttr('readonly');
+				input.prop('readonly', false);
 			}
 			return displayValue;
 		},
@@ -715,6 +1440,7 @@ var knownMenuFields = {
 		}
 	}),
 
+	//TODO: Never save this field. It just wastes database space.
 	'required_capability_read_only' : $.extend({}, baseField, {
 		caption: 'Required capability',
 		defaultValue: 'none',
@@ -808,7 +1534,7 @@ var knownMenuFields = {
 			}
 
 			var selectButton = input.closest('.ws_edit_field').find('.ws_select_icon');
-			var cssIcon = selectButton.find('.icon16');
+			var cssIcon = selectButton.find('.ws_icon_image');
 			var imageIcon = selectButton.find('img');
 
 			var matches = cssClass.match(/\b(ame-)?menu-icon-([^\s]+)\b/);
@@ -820,7 +1546,7 @@ var knownMenuFields = {
 				cssIcon.hide();
 				imageIcon.prop('src', iconUrl).show();
 			} else if ( iconFontMatches ) {
-				cssIcon.removeClass().addClass('icon16');
+				cssIcon.removeClass().addClass('ws_icon_image');
 				if ( iconFontMatches[2] === 'dashicons' ) {
 					//Dashicon.
 					cssIcon.addClass('dashicons ' + iconFontMatches[1]);
@@ -834,12 +1560,12 @@ var knownMenuFields = {
 				//Other CSS-based icon.
 				imageIcon.hide();
 				var iconClass = (matches[1] ? matches[1] : '') + 'icon-' + matches[2];
-				cssIcon.removeClass().addClass('icon16 ' + iconClass).show();
+				cssIcon.removeClass().addClass('ws_icon_image ' + iconClass).show();
 			} else {
 				//This menu has no icon at all. This is actually a valid state
 				//and WordPress will display a menu like that correctly.
 				imageIcon.hide();
-				cssIcon.removeClass().addClass('icon16').show();
+				cssIcon.removeClass().addClass('ws_icon_image').show();
 			}
 
 			return displayValue;
@@ -942,8 +1668,7 @@ var knownMenuFields = {
 
 	'css_class' : $.extend({}, baseField, {
 		caption: 'CSS classes',
-		advanced : true,
-		onlyForTopMenus: true
+		advanced : true
 	}),
 
 	'hookname' : $.extend({}, baseField, {
@@ -981,6 +1706,8 @@ var knownMenuFields = {
 		standardCaption: false
 	})
 };
+
+var visibleMenuFieldsByType = {};
 
 AmeEditorApi.getItemDisplayUrl = function(menuItem) {
 	var url = getFieldValue(menuItem, 'file', '');
@@ -1029,10 +1756,16 @@ function buildEditboxFields(fieldContainer, entry, isTopLevel){
 
 	//Add a link that shows/hides advanced fields
 	fieldContainer.append(
-		'<div class="ws_toggle_container"><a href="#" class="ws_toggle_advanced_fields"'+
-		(wsEditorData.hideAdvancedSettings ? '' : ' style="display:none;" ' )+'>'+
-		(wsEditorData.hideAdvancedSettings ? wsEditorData.captionShowAdvanced : wsEditorData.captionHideAdvanced)
-		+'</a></div>'
+		$('<div>').addClass('ws_toggle_container').append(
+			$('<a></a>', {href: '#'})
+				.addClass('ws_toggle_advanced_fields')
+				.text(
+					wsEditorData.hideAdvancedSettings
+						? wsEditorData.captionShowAdvanced
+						: wsEditorData.captionHideAdvanced
+				)
+				.toggle(!!wsEditorData.hideAdvancedSettings) //Conver to boolean because it could be a string ("1" or "0").
+		)
 	);
 }
 
@@ -1042,7 +1775,7 @@ function buildEditboxFields(fieldContainer, entry, isTopLevel){
 //noinspection JSUnusedLocalSymbols
 function buildEditboxField(entry, field_name, field_settings){
 	//Build a form field of the appropriate type
-	var inputBox = null;
+	var inputBox;
 	var basicTextField = '<input type="text" class="ws_field_value">';
 	//noinspection FallthroughInSwitchStatementJS
 	switch(field_settings.type){
@@ -1061,9 +1794,10 @@ function buildEditboxField(entry, field_name, field_settings){
 			break;
 
         case 'checkbox':
-            inputBox = $('<label><input type="checkbox" class="ws_field_value"> <span class="ws_field_label_text">'+
-                field_settings.caption + '</span></label>'
-            );
+	        inputBox = $('<label></label>')
+		        .append($('<input>', {type: 'checkbox', "class": 'ws_field_value'}))
+		        .append(' ')
+		        .append($('<span></span>', {"class": 'ws_field_label_text'}).text(field_settings.caption))
             break;
 
 		case 'access_editor':
@@ -1074,7 +1808,7 @@ function buildEditboxField(entry, field_name, field_settings){
 		case 'icon_selector':
 			//noinspection HtmlUnknownTag
 			inputBox = $(basicTextField)
-                .add('<button class="button ws_select_icon" title="Select icon"><div class="icon16 icon-settings"></div><img src="" style="display:none;"></button>');
+                .add('<button class="button ws_select_icon" title="Select icon"><div class="ws_icon_image dashicons dashicons-admin-generic"></div><img src="" style="display:none;" alt="Icon"></button>');
 			break;
 
 		case 'color_scheme_editor':
@@ -1083,7 +1817,7 @@ function buildEditboxField(entry, field_name, field_settings){
 			break;
 
 		case 'heading':
-			inputBox = $('<span>' + field_settings.caption + '</span>');
+			inputBox = $('<span></span>').text(field_settings.caption);
 			break;
 
 		case 'text':
@@ -1104,23 +1838,30 @@ function buildEditboxField(entry, field_name, field_settings){
 		className += ' ws_field_group_heading';
 	}
 
-	var caption = '';
+	var caption = $(); //Empty set by default.
 	if (field_settings.standardCaption) {
-		var tooltip = '';
+		var $labelText = $('<span></span>')
+			.addClass('ws_field_label_text')
+			.text(field_settings.caption + ' ');
+
 		if (field_settings.tooltip !== null) {
-			tooltip = ' <a class="ws_field_tooltip_trigger"><div class="dashicons dashicons-info"></div></a>';
+			$labelText.append(
+				'<a class="ws_field_tooltip_trigger"><div class="dashicons dashicons-info"></div></a>'
+			);
 		}
-		caption = '<span class="ws_field_label_text">' + field_settings.caption + tooltip + '</span><br>';
+
+		caption = caption.add($labelText).add('<br>'); //Note: add(), not append().
 	}
-	var editField = $('<div>' + caption + '</div>')
+	var editField = $('<div></div>')
 		.attr('class', className)
+		.append(caption)
 		.append(inputBox);
 
 	if (field_settings.addDropdown) {
 		//Add a dropdown button
 		var dropdownId = field_settings.addDropdown;
 		editField.append(
-			$('<input type="button" value="&#9660;">')
+			$('<input type="button" value="&#xf347;">')
 				.addClass('button ws_dropdown_button ' + dropdownId + '_trigger')
 				.attr('tabindex', '-1')
 				.data('dropdownId', dropdownId)
@@ -1129,11 +1870,11 @@ function buildEditboxField(entry, field_name, field_settings){
 
 	editField
 		.append(
-			$('<img class="ws_reset_button" title="Reset to default value" src="">')
+			$('<img class="ws_reset_button" title="Reset to default value" src="" alt="Reset">')
 				.attr('src', wsEditorData.imagesUrl + '/transparent16.png')
 		).data('field_name', field_name);
 
-	var visible = true;
+	var visible;
 	if (typeof field_settings.visible === 'function') {
 		visible = field_settings.visible(entry, field_name);
 	} else {
@@ -1160,6 +1901,23 @@ function getParentMenuNode(containerNode) {
 	} else {
 		return $([]);
 	}
+}
+
+/**
+ * Check if a menu item is the parent of another item or a submenu list.
+ *
+ * @param {JQuery} menuItem
+ * @param {JQuery} something
+ * @returns {boolean}
+ */
+function isParentMenuNodeOf(menuItem, something) {
+	const parent = getParentMenuNode(something)
+	if (menuItem.is(parent)) {
+		return true;
+	} else if (parent.length > 0) {
+		return isParentMenuNodeOf(menuItem, parent);
+	}
+	return false;
 }
 
 /**
@@ -1199,15 +1957,15 @@ function walkMenuTree(containerNode, callback) {
  */
 function updateActorAccessUi(containerNode) {
 	//Update the permissions checkbox & UI
-	var menuItem = containerNode.data('menu_item');
+	const menuItem = containerNode.data('menu_item');
 	if (actorSelectorWidget.selectedActor !== null) {
-		var hasAccess = actorCanAccessMenu(menuItem, actorSelectorWidget.selectedActor);
-		var hasCustomPermissions = actorHasCustomPermissions(menuItem, actorSelectorWidget.selectedActor);
+		let hasAccess = actorCanAccessMenu(menuItem, actorSelectorWidget.selectedActor);
+		const hasCustomPermissions = actorHasCustomPermissions(menuItem, actorSelectorWidget.selectedActor);
 
-		var isOverrideActive = !hasAccess && getFieldValue(menuItem, 'restrict_access_to_items', false);
+		let isOverrideActive = !hasAccess && getFieldValue(menuItem, 'restrict_access_to_items', false);
 
 		//Check if the parent menu has the "hide all submenus if this is hidden" override in effect.
-		var currentChild = containerNode, parentNode, parentItem;
+		let currentChild = containerNode, parentNode, parentItem;
 		do {
 			parentNode = getParentMenuNode(currentChild);
 			parentItem = parentNode.data('menu_item');
@@ -1223,23 +1981,38 @@ function updateActorAccessUi(containerNode) {
 			currentChild = parentNode;
 		} while (parentNode.length > 0);
 
-		var checkbox = containerNode.find('.ws_actor_access_checkbox');
-		checkbox.prop('checked', hasAccess);
+		//For better UX, try to predict the visible/hidden state even when we can't determine
+		//it reliably for items that use meta capabilities.
+		let predictedHasAccess = !!hasAccess;
+		let isUncertainMetaCap = false;
+
+		//Check meta capabilities.
+		if (hasAccess === null) {
+			const requiredCap = getFieldValue(menuItem, 'access_level', '< Error: access_level is missing! [2] >');
+			const result = AmeCapabilityManager.maybeHasMetaCap(actorSelectorWidget.selectedActor, requiredCap);
+			if (result !== null) {
+				predictedHasAccess = !!result.prediction;
+				isUncertainMetaCap = true;
+			}
+		}
+
+		const checkbox = containerNode.find('.ws_actor_access_checkbox');
+		checkbox.prop('checked', predictedHasAccess);
 
 		//Display the checkbox in an indeterminate state if the actual menu permissions are unknown
 		//because it uses meta capabilities.
-		var isIndeterminate = (hasAccess === null);
+		let isIndeterminate = (hasAccess === null);
 		//Also show it as indeterminate if some items of this menu are hidden and some are visible,
 		//or if their permissions don't match this menu's permissions.
-		var submenuItems = getSubmenuItemNodes(containerNode);
+		const submenuItems = getSubmenuItemNodes(containerNode);
 		if ((submenuItems.length > 0) && !isOverrideActive)  {
-			var differentPermissions = false;
+			let differentPermissions = false;
 			submenuItems.each(function() {
-				var item = $(this).data('menu_item');
+				const item = $(this).data('menu_item');
 				if ( !item ) { //Skip placeholder items created by drag & drop operations.
 					return true;
 				}
-				var hasSubmenuAccess = actorCanAccessMenu(item, actorSelectorWidget.selectedActor);
+				const hasSubmenuAccess = actorCanAccessMenu(item, actorSelectorWidget.selectedActor);
 				if (hasSubmenuAccess !== hasAccess) {
 					differentPermissions = true;
 					return false;
@@ -1253,12 +2026,12 @@ function updateActorAccessUi(containerNode) {
 		}
 		checkbox.prop('indeterminate', isIndeterminate);
 
-		if (isIndeterminate && (hasAccess === null)) {
+		if (isUncertainMetaCap) {
 			setMenuFlag(
 				containerNode,
 				'uncertain_meta_cap',
 				true,
-				"This item might be visible.\n"
+				"This item might " + (predictedHasAccess ? 'not ' : '') + "be visible.\n"
 				+ "The plugin cannot reliably detect if \"" + actorSelectorWidget.selectedDisplayName
 				+ "\" has the \"" + getFieldValue(menuItem, 'access_level', '[No capability]')
 				+ "\" capability. If you need to hide the item, try checking and then unchecking it."
@@ -1267,7 +2040,7 @@ function updateActorAccessUi(containerNode) {
 			setMenuFlag(containerNode, 'uncertain_meta_cap', false);
 		}
 
-		containerNode.toggleClass('ws_is_hidden_for_actor', !hasAccess);
+		containerNode.toggleClass('ws_is_hidden_for_actor', !predictedHasAccess);
 		containerNode.toggleClass('ws_has_custom_permissions_for_actor', hasCustomPermissions);
 		setMenuFlag(containerNode, 'custom_actor_permissions', hasCustomPermissions);
 		setMenuFlag(containerNode, 'hidden_from_others', false);
@@ -1276,11 +2049,11 @@ function updateActorAccessUi(containerNode) {
 		setMenuFlag(containerNode, 'custom_actor_permissions', false);
 		setMenuFlag(containerNode, 'uncertain_meta_cap', false);
 
-		var currentUserActor = 'user:' + wsEditorData.currentUserLogin;
-		var otherActors = _(wsEditorData.actors).keys().without(currentUserActor, 'special:super_admin').value(),
-			hiddenFromCurrentUser = ! actorCanAccessMenu(menuItem, currentUserActor),
+		const currentUserActor = 'user:' + wsEditorData.currentUserLogin;
+		const otherActors = _(wsEditorData.actors).keys().without(currentUserActor, 'special:super_admin').value(),
+			hiddenFromCurrentUser = !actorCanAccessMenu(menuItem, currentUserActor),
 			hasAccessToThisItem = _.curry(actorCanAccessMenu, 2)(menuItem),
-			hiddenFromOthers = _.every(otherActors, function(actorId) {
+			hiddenFromOthers = _.every(otherActors, function (actorId) {
 				return (hasAccessToThisItem(actorId) === false);
 			}),
 			visibleForSuperAdmin = AmeActors.isMultisite && actorCanAccessMenu(menuItem, 'special:super_admin');
@@ -1326,11 +2099,17 @@ function updateParentAccessUi(containerNode) {
  */
 function updateItemEditor(containerNode) {
 	var menuItem = containerNode.data('menu_item');
+	var itemSubType = (menuItem.hasOwnProperty('sub_type') ? menuItem['sub_type'] : '');
 
 	//Apply flags based on the item's state.
 	var flags = ['hidden', 'unused', 'custom'];
 	for (var i = 0; i < flags.length; i++) {
 		setMenuFlag(containerNode, flags[i], getFieldValue(menuItem, flags[i], false));
+	}
+
+	if (itemSubType) {
+		var typeTitle = itemSubType.charAt(0).toUpperCase() + itemSubType.slice(1);
+		setMenuFlag(containerNode, 'subtype_' + itemSubType, true, typeTitle);
 	}
 
 	//Update the permissions checkbox & other actor-specific UI
@@ -1370,16 +2149,22 @@ function updateItemEditor(containerNode) {
 			$.data(input.get(0), 'ame_last_display_value', displayValue);
 		}
 
+		var isFieldVisible = _.get(visibleMenuFieldsByType, [itemSubType, fieldName], true);
 		if (typeof (knownMenuFields[fieldName].visible) === 'function') {
-			var isFieldVisible = knownMenuFields[fieldName].visible(menuItem, fieldName);
-			if (isFieldVisible) {
-				field.css('display', '');
-			} else {
-				field.css('display', 'none');
-			}
+			isFieldVisible = isFieldVisible && knownMenuFields[fieldName].visible(menuItem, fieldName);
+		} else {
+			isFieldVisible = isFieldVisible && knownMenuFields[fieldName].visible;
+		}
+		if (isFieldVisible) {
+			field.css('display', '');
+		} else {
+			field.css('display', 'none');
 		}
     });
 }
+
+AmeEditorApi.updateParentAccessUi = updateParentAccessUi;
+AmeEditorApi.updateItemEditor = updateItemEditor;
 
 function isEmptyObject(obj) {
     for (var prop in obj) {
@@ -1485,6 +2270,8 @@ function makeBoxSortable(menuBox){
 		placeholder: 'ws_container ws_sortable_placeholder',
 		forcePlaceholderSize: true,
 
+		connectWith: '.ws_submenu',
+
 		stop: function(even, ui) {
 			//Fix incorrect item overlap caused by jQuery.sortable applying the initial z-index as an inline style.
 			ui.item.css('z-index', '');
@@ -1492,6 +2279,62 @@ function makeBoxSortable(menuBox){
 			//Fix submenu container height. It should be tall enough to reach the selected parent menu.
 			if (ui.item.hasClass('ws_menu') && ui.item.hasClass('ws_active')) {
 				AmeEditorApi.updateSubmenuBoxHeight(ui.item);
+			}
+		},
+
+		over: function(event, ui) {
+			//Provide visual feedback if the user drags an unacceptable item over the list.
+			const $list = $(this);
+			const targetColumn = menuPresenter.getItemColumn($list);
+			if (!targetColumn) {
+				return;
+			}
+
+			$list.closest('.ws_main_container').toggleClass(
+				'ws_invalid_item_drop_target',
+				!targetColumn.canAcceptItem(ui.item)
+			);
+		},
+
+		out: function() {
+			$(this).closest('.ws_main_container').removeClass('ws_invalid_item_drop_target');
+		},
+
+		receive: function(event, ui) {
+			//Receive a menu item from another column.
+			const $sender = $(ui.sender);
+
+			const $itemNode = ui.item;
+			const targetColumn = menuPresenter.getItemColumn($itemNode);
+			const sourceColumn = menuPresenter.getItemColumn($sender);
+
+			if (!targetColumn || !sourceColumn)  {
+				$sender.sortable('cancel');
+				return;
+			}
+			if (!targetColumn.canAcceptItem($itemNode)) {
+				$sender.sortable('cancel');
+				return;
+			}
+
+			//The way that inter-column drag & drop actually works is that we copy the item
+			//to the target column and then delete the original item. This way all the internal
+			//data structures are updated correctly.
+
+			//Remember where the item was dropped in the target column.
+			const $previousItem = $itemNode.prev('.ws_container');
+
+			//Move the original item back.
+			$sender.sortable('cancel');
+
+			//Copy & paste the item to the target column.
+			const droppedItemData = readItemState($itemNode);
+			targetColumn.pasteItem(droppedItemData, ($previousItem.length > 0) ? $previousItem : -1);
+
+			//Delete the original. Optionally, the user can hold Ctrl to avoid this
+			//(i.e. to copy the item instead of moving it).
+			if ( !event.ctrlKey ) {
+				sourceColumn.destroyItem($itemNode);
 			}
 		}
 	});
@@ -1522,25 +2365,36 @@ AmeEditorApi.forEachMenuItem = function(callback, skipSeparators) {
 /**
  * Select the first menu item that has the specified URL.
  *
- * @param {string} boxSelector
+ * @param {number|string} selectorOrLevel
  * @param {string} url
- * @param {boolean|null} [expandProperties]
+ * @param {null|Boolean} [expandProperties]
  * @returns {JQuery}
  */
-AmeEditorApi.selectMenuItemByUrl = function(boxSelector, url, expandProperties) {
+AmeEditorApi.selectMenuItemByUrl = function(selectorOrLevel, url, expandProperties) {
 	if (typeof expandProperties === 'undefined') {
 		expandProperties = null;
 	}
 
-	var box = $(boxSelector);
-	if (box.is('#ws_submenu_box')) {
-		box = box.find('.ws_submenu:visible').first();
+	let level;
+	if (selectorOrLevel === '#ws_menu_box') {
+		level = 1;
+	} else if (selectorOrLevel === '#ws_submenu_box') {
+		level = 2;
+	} else {
+		level = selectorOrLevel;
 	}
 
-	var containerNode =
+	const column = menuPresenter.getColumnImmediate(level);
+	if (!column) {
+		return $([]);
+	}
+
+	const box = column.getVisibleItemList();
+
+	const containerNode =
 		box.find('.ws_container')
 		.filter(function() {
-			var itemUrl = AmeEditorApi.getItemDisplayUrl($(this).data('menu_item'));
+			const itemUrl = AmeEditorApi.getItemDisplayUrl($(this).data('menu_item'));
 			return (itemUrl === url);
 		})
 		.first();
@@ -1549,9 +2403,9 @@ AmeEditorApi.selectMenuItemByUrl = function(boxSelector, url, expandProperties) 
 		AmeEditorApi.selectItem(containerNode);
 
 		if (expandProperties !== null) {
-			var expandLink = containerNode.find('.ws_edit_link').first();
+			const expandLink = containerNode.find('.ws_edit_link').first();
 			if (expandLink.hasClass('ws_edit_link_expanded') !== expandProperties) {
-				expandLink.click();
+				expandLink.trigger('click');
 			}
 		}
 	}
@@ -1579,7 +2433,7 @@ function encodeMenuAsJSON(tree){
 	//Compress the admin menu.
 	tree = compressMenu(tree);
 
-	return $.toJSON(tree);
+	return JSON.stringify(tree);
 }
 
 function readMenuTreeState(){
@@ -1619,21 +2473,51 @@ function readMenuTreeState(){
 		itemsByFilename[filename] = containerNode;
 	});
 
+	// Ensure items that need auto-generated slugs have unique IDs. The IDs only
+	// need to be unique within the same menu configuration, not globally.
+	let localIdCounter = 0;
+	const usedLocalIds = {};
+	function ensureUniqueIdIfNeeded(menuItem) {
+		// Recurse into children.
+		if (menuItem.items) {
+			_.forEach(menuItem.items, ensureUniqueIdIfNeeded);
+		}
+
+		const needsUniqueId = (menuItem.template_id === wsEditorData.embeddedPageTemplateId)
+			|| (menuItem.open_in === 'iframe');
+		const currentLocalId = (typeof menuItem.local_id === 'string') ? menuItem.local_id : '';
+
+		// Assign a new ID if the item needs one and doesn't have it, or if the current ID
+		// is a duplicate. IDs can get duplicated if the user copies and pastes items.
+		if ((needsUniqueId && (currentLocalId === '')) || usedLocalIds.hasOwnProperty(currentLocalId)) {
+			menuItem.local_id = randomMenuId(localIdCounter + 'C', 8);
+		}
+
+		if (typeof menuItem.local_id === 'string') {
+			usedLocalIds[menuItem.local_id] = true;
+			localIdCounter++;
+		}
+	}
+	_.forEach(tree, ensureUniqueIdIfNeeded);
+
 	AmeCapabilityManager.pruneGrantedUserCapabilities();
 
-	return {
+	var result = {
 		tree: tree,
-		color_presets: $.extend(true, {}, colorPresets),
 		granted_capabilities: AmeCapabilityManager.getGrantedCapabilities(),
+		suspected_meta_caps: AmeCapabilityManager.getSuspectedMetaCaps(),
 		component_visibility: $.extend(true, {}, generalComponentVisibility)
 	};
+
+	$(document).trigger('getMenuConfiguration.adminMenuEditor', result);
+	return result;
 }
 
 /**
  * Losslessly compress the admin menu configuration.
- * 
+ *
  * This is a JS port of the ameMenu::compress() function defined in /includes/menu.php.
- * 
+ *
  * @param {Object} adminMenu
  * @returns {Object}
  */
@@ -1789,7 +2673,7 @@ function readAllFields(container){
  Flag manipulation
  ***************************************************************************/
 
-var item_flags = {
+const item_flags = {
 	'custom': 'This is a custom menu item',
 	'unused': 'This item was added since the last time you saved menu settings.',
 	'hidden': 'Cosmetically hidden',
@@ -1802,14 +2686,14 @@ function setMenuFlag(item, flag, state, title) {
 	title = title || item_flags[flag];
 	item = $(item);
 
-	var item_class = 'ws_' + flag;
-	var img_class = 'ws_' + flag + '_flag';
+	const item_class = 'ws_' + flag;
+	const img_class = 'ws_' + flag + '_flag';
 
 	item.toggleClass(item_class, state);
 	if (state) {
 		//Add the flag image.
-		var flag_container = item.find('.ws_flag_container');
-		var image = flag_container.find('.' + img_class);
+		const flag_container = item.find('.ws_flag_container');
+		let image = flag_container.find('.' + img_class);
 		if (image.length === 0) {
 			image = $('<div></div>').addClass('ws_flag').addClass(img_class);
 			flag_container.append(image);
@@ -1836,7 +2720,7 @@ function menuHasFlag(item, flag){
  * @returns {boolean}
  */
 function itemHasHiddenFlag(menuItem, actor) {
-	var isHidden = false,
+	let isHidden = false,
 		userActors,
 		userPrefix = 'user:',
 		userLogin;
@@ -1854,7 +2738,7 @@ function itemHasHiddenFlag(menuItem, actor) {
 			//Otherwise the item is hidden only if it is hidden from all of the user's roles.
 			userLogin = actorSelectorWidget.selectedActor.substr(userPrefix.length);
 			userActors = AmeCapabilityManager.getGroupActorsFor(userLogin);
-			for (var i = 0; i < userActors.length; i++) {
+			for (let i = 0; i < userActors.length; i++) {
 				if (menuItem.hidden_from_actor.hasOwnProperty(userActors[i]) && menuItem.hidden_from_actor[userActors[i]]) {
 					isHidden = true;
 				} else {
@@ -1938,8 +2822,8 @@ function actorCanAccessMenu(menuItem, actor) {
 
 	//By default, any actor that has the required cap has access to the menu.
 	//Users can override this on a per-menu basis.
-	var requiredCap = getFieldValue(menuItem, 'access_level', '< Error: access_level is missing! >');
-	var actorHasAccess = false;
+	const requiredCap = getFieldValue(menuItem, 'access_level', '< Error: access_level is missing! >');
+	let actorHasAccess;
 	if (menuItem.grant_access.hasOwnProperty(actor)) {
 		actorHasAccess = menuItem.grant_access[actor];
 	} else {
@@ -2028,6 +2912,9 @@ var generalComponentVisibility = {};
 var isDomReadyDone = false;
 
 function ameOnDomReady() {
+	if (isDomReadyDone) {
+		return;
+	}
 	isDomReadyDone = true;
 
 	//Some editor elements are only available in the Pro version.
@@ -2043,11 +2930,16 @@ function ameOnDomReady() {
 		//The Pro version supports submenu icons, but they can be disabled by the user.
 		knownMenuFields.icon_url.onlyForTopMenus = (wsEditorData.submenuIconsEnabled === 'never');
 
+		//The Pro version has more submenu fields, so let's enable the separator below "CSS classes".
+		//In the free version, the separator is hidden because there would only be a single field below it.
+		knownMenuFields.page_properties_heading.onlyForTopMenus = false;
+
 		$('.ws_hide_if_pro').hide();
 	}
 
-	//Let other plugins filter knownMenuFields.
+	//Let other plugins filter knownMenuFields and menu fields by type.
 	$(document).trigger('filterMenuFields.adminMenuEditor', [knownMenuFields, baseField]);
+	$(document).trigger('filterVisibleMenuFields.adminMenuEditor', [visibleMenuFieldsByType]);
 
 	//Make the top menu box sortable (we only need to do this once)
     var mainMenuBox = $('#ws_menu_box');
@@ -2056,11 +2948,9 @@ function ameOnDomReady() {
 	/***************************************************************************
 	                  Event handlers for editor widgets
 	 ***************************************************************************/
-	var menuEditorNode = $('#ws_menu_editor'),
-		submenuBox = $('#ws_submenu_box'),
-		submenuDropZone = submenuBox.closest('.ws_main_container').find('.ws_dropzone');
+	const menuEditorNode = $('#ws_menu_editor');
 
-	var currentVisibleSubmenu = null;
+	menuPresenter = new AmeMenuPresenter(menuEditorNode, wsEditorData.deepNestingEnabled);
 
 	/**
 	 * Select a menu item and show its submenu.
@@ -2068,32 +2958,7 @@ function ameOnDomReady() {
 	 * @param {JQuery|HTMLElement} container Menu container node.
 	 */
 	function selectItem(container) {
-		if (container.hasClass('ws_active')) {
-			//The menu item is already selected.
-			return;
-		}
-
-		//Highlight the active item and un-highlight the previous one
-		container.addClass('ws_active');
-		container.siblings('.ws_active').removeClass('ws_active');
-		if (container.hasClass('ws_menu')) {
-			//Show/hide the appropriate submenu
-			if ( currentVisibleSubmenu ){
-				currentVisibleSubmenu.hide();
-			}
-			currentVisibleSubmenu = $('#' + container.data('submenu_id')).show();
-
-			updateSubmenuBoxHeight(container);
-
-			currentVisibleSubmenu.closest('.ws_main_container')
-				.find('.ws_toolbar .ws_delete_menu_button')
-				.toggleClass('ws_button_disabled', !canDeleteItem(getSelectedSubmenuItem()));
-		}
-
-		//Make the "delete" button appear disabled if you can't delete this item.
-		container.closest('.ws_main_container')
-			.find('.ws_toolbar .ws_delete_menu_button')
-			.toggleClass('ws_button_disabled', !canDeleteItem(container));
+		menuPresenter.selectItem(container);
 	}
 	AmeEditorApi.selectItem = selectItem;
 
@@ -2103,6 +2968,16 @@ function ameOnDomReady() {
     }));
 
 	function updateSubmenuBoxHeight(selectedMenu) {
+		//TODO: Eliminate this duplication. Maybe we could just call the corresponding column method.
+		const myColumn = menuPresenter.getColumnImmediate(selectedMenu.closest('.ws_main_container').data('ame-menu-level') || 1);
+		const nextColumn = menuPresenter.getColumnImmediate(myColumn.level + 1);
+		if (!nextColumn || (nextColumn === myColumn)) {
+			return;
+		}
+		let mainMenuBox = myColumn.menuBox,
+			submenuBox = nextColumn.menuBox,
+			submenuDropZone = nextColumn.container.find('.ws_dropzone').first();
+
 		//Make the submenu box tall enough to reach the selected item.
 		//This prevents the menu tip (if any) from floating in empty space.
 		if (selectedMenu.hasClass('ws_menu_separator')) {
@@ -2113,7 +2988,7 @@ function ameOnDomReady() {
 				verticalBoxOffset = (submenuBox.offset().top - mainMenuBox.offset().top),
 				minSubmenuHeight = (selectedMenu.offset().top - mainMenuBox.offset().top)
 					- verticalBoxOffset
-					+ menuTipHeight - submenuDropZone.outerHeight() + empiricalExtraHeight;
+					+ menuTipHeight - (submenuDropZone.outerHeight() || 0) + empiricalExtraHeight;
 			minSubmenuHeight = Math.max(minSubmenuHeight, 0);
 			submenuBox.css('min-height', minSubmenuHeight);
 		}
@@ -2228,7 +3103,8 @@ function ameOnDomReady() {
             field.removeClass('ws_input_default');
         }
 
-        if (field.hasClass('ws_input_default') && (value == defaultValue)) {
+        // noinspection EqualityComparisonWithCoercionJS It's been like this so long that I'm afraid to change it.
+	    if (field.hasClass('ws_input_default') && (value == defaultValue)) {
             value = null; //null = use default.
         }
 
@@ -2239,6 +3115,7 @@ function ameOnDomReady() {
 
 	    //Update the item.
 	    if (knownMenuFields[fieldName].write !== null) {
+			// phpcs:ignore WordPressVIPMinimum.JS.HTMLExecutingFunctions.write -- Misdetected. Not document.write().
 		    knownMenuFields[fieldName].write(menuItem, value, input, containerNode);
 	    } else {
 		    menuItem[fieldName] = value;
@@ -2299,23 +3176,42 @@ function ameOnDomReady() {
 	 * @param containerNode
 	 * @param {String|Object.<String, Boolean>} actor
 	 * @param {Boolean} [allowAccess]
+	 * @param {Boolean} [skipParentUiRefresh] Whether to skip updating the parent access UI. Defaults to false.
 	 */
-	function setActorAccessForTreeAndUpdateUi(containerNode, actor, allowAccess) {
+	function setActorAccessForTreeAndUpdateUi(containerNode, actor, allowAccess, skipParentUiRefresh) {
 		setActorAccess(containerNode, actor, allowAccess);
 
 		//Apply the same permissions to sub-menus.
-		var subMenuId = containerNode.data('submenu_id');
-		if (subMenuId && containerNode.hasClass('ws_menu')) {
+		const subMenuId = containerNode.data('submenu_id');
+		if (subMenuId) {
 			$('.ws_item', '#' + subMenuId).each(function() {
-				var node = $(this);
-				setActorAccess(node, actor, allowAccess);
-				updateItemEditor(node);
+				const node = $(this);
+				setActorAccessForTreeAndUpdateUi(node, actor, allowAccess, true);
 			});
 		}
 
 		updateItemEditor(containerNode);
-		updateParentAccessUi(containerNode);
+		updateActorAccessUi(containerNode);
+
+		if ( !skipParentUiRefresh ) {
+			updateParentAccessUi(containerNode);
+		}
 	}
+
+	/**
+	 * Insert a new top level menu after the selected menu or at the end of the list.
+	 *
+	 * @param {Object} menu
+	 */
+	function insertMenu(menu) {
+		const selection = (typeof getSelectedMenu !== 'undefined') ? getSelectedMenu() : null;
+		if (selection && (selection.length > 0) ) {
+			outputTopMenu(menu, selection);
+		} else {
+			outputTopMenu(menu);
+		}
+	}
+	AmeEditorApi.insertMenu = insertMenu;
 
 	/**
 	 * Confirm with the user that they want to hide "Dashboard -> Home".
@@ -2348,7 +3244,7 @@ function ameOnDomReady() {
 		permissionConfirmationDialog.dialog('open');
 	}
 
-	$('#ws_confirm_menu_hiding, #ws_cancel_menu_hiding').click(function() {
+	$('#ws_confirm_menu_hiding, #ws_cancel_menu_hiding').on('click', function() {
 		var confirmed = $(this).is('#ws_confirm_menu_hiding');
 		var dontShowAgain = permissionConfirmationDialog.find('.ws_dont_show_again input[type="checkbox"]').is(':checked');
 
@@ -2462,13 +3358,15 @@ function ameOnDomReady() {
 
 	var isDropdownBeingHidden = false, isSuggestionClick = false;
 
+	const $extraCapInAccessEditor = $('#ws_extra_capability');
+
 	//Show/hide the capability drop-down list when the trigger button is clicked
 	$('#ws_trigger_capability_dropdown').on('mousedown click', onDropdownTriggerClicked);
 	menuEditorNode.on('mousedown click', '.ws_cap_selector_trigger', onDropdownTriggerClicked);
 
 	function onDropdownTriggerClicked(event){
 		/* jshint validthis:true */
-		var inputBox = null;
+		var inputBox;
 		var button = $(this);
 
 		var isInAccessEditor = false;
@@ -2476,7 +3374,7 @@ function ameOnDomReady() {
 
 		//Find the input associated with the button that was clicked.
 		if ( button.attr('id') === 'ws_trigger_capability_dropdown' ) {
-			inputBox = $('#ws_extra_capability');
+			inputBox = $extraCapInAccessEditor;
 			isInAccessEditor = true;
 		} else {
 			inputBox = button.closest('.ws_edit_field').find('.ws_field_value').first();
@@ -2527,16 +3425,16 @@ function ameOnDomReady() {
 		} else {
 			currentDropdownOwnerMenu = currentDropdownOwner.closest('.ws_container').data('menu_item');
 		}
-		
+
 		capSelectorDropdown.focus();
 
 		capSuggestionFeature.show();
 	}
 
 	//Also show it when the user presses the down arrow in the input field (doesn't work in Opera).
-	$('#ws_extra_capability').bind('keyup', function(event){
+	$extraCapInAccessEditor.bind('keyup', function(event){
 		if ( event.which === 40 ){
-			$('#ws_trigger_capability_dropdown').click();
+			$('#ws_trigger_capability_dropdown').trigger('click');
 		}
 	});
 
@@ -2550,13 +3448,13 @@ function ameOnDomReady() {
 	var dropdownNodes = $('.ws_dropdown');
 
 	// Hide capability drop-down when it loses focus.
-	dropdownNodes.blur(function(){
+	dropdownNodes.on('blur', function(){
 		if (!isSuggestionClick) {
 			hideCapSelector();
 		}
 	});
 
-	dropdownNodes.keydown(function(event){
+	dropdownNodes.on('keydown', function(event){
 
 		//Hide it when the user presses Esc
 		if ( event.which === 27 ){
@@ -2581,7 +3479,7 @@ function ameOnDomReady() {
 	});
 
 	//Eat Tab keys to prevent focus theft. Required to make the "select item on Tab" thing work.
-	dropdownNodes.keyup(function(event){
+	dropdownNodes.on('keyup', function(event){
 		if ( event.which === 9 ){
 			event.preventDefault();
 		}
@@ -2589,7 +3487,7 @@ function ameOnDomReady() {
 
 
 	//Update the input & hide the list when an option is clicked
-	dropdownNodes.click(function(){
+	dropdownNodes.on('click', function(){
 		if (capSelectorDropdown.val()){
 			hideCapSelector();
 			if (currentDropdownOwner) {
@@ -2599,7 +3497,7 @@ function ameOnDomReady() {
 	});
 
 	//Highlight an option when the user mouses over it (doesn't work in IE)
-	dropdownNodes.mousemove(function(event){
+	dropdownNodes.on('mousemove', function(event){
 		if ( !event.target ){
 			return;
 		}
@@ -2786,9 +3684,16 @@ function ameOnDomReady() {
 	var iconSelectorTabs = iconSelector.find('#ws_icon_source_tabs');
 	iconSelectorTabs.tabs();
 
+	const svgIconPrefix = 'data:image/svg+xml;base64,';
+	const svgIconField = $('#ws_menu_svg_icon_code');
+
 	//When the user clicks one of the available icons, update the menu item.
 	iconSelector.on('click', '.ws_icon_option', function() {
-		var selectedIcon = $(this).addClass('ws_selected_icon');
+		const selectedIcon = $(this).addClass('ws_selected_icon');
+		applyIconFromSelector(selectedIcon.data('icon-class'), selectedIcon.data('icon-url'));
+	});
+
+	function applyIconFromSelector(newCssClass, newIconUrl, clear) {
 		iconSelector.hide();
 
 		//Assign the selected icon to the menu.
@@ -2800,13 +3705,15 @@ function ameOnDomReady() {
 			var cssClass = getFieldValue(item, 'css_class', '');
 			cssClass = jsTrim( cssClass.replace(/\b(ame-)?menu-icon-[^\s]+\b/, '') );
 
-			if (selectedIcon.data('icon-class')) {
+			if (newCssClass) {
 				//Add the new class.
-				cssClass = selectedIcon.data('icon-class') + ' ' + cssClass;
+				cssClass = newCssClass + ' ' + cssClass;
 				//Can't have both a class and an image or we'll get two overlapping icons.
 				item.icon_url = '';
-			} else if (selectedIcon.data('icon-url')) {
-				item.icon_url = selectedIcon.data('icon-url');
+			} else if (newIconUrl) {
+				item.icon_url = newIconUrl;
+			} else if (clear) {
+				item.icon_url = '';
 			}
 			item.css_class = cssClass;
 
@@ -2814,7 +3721,7 @@ function ameOnDomReady() {
 		}
 
 		currentIconButton = null;
-	});
+	}
 
 	//Show/hide the icon selector when the user clicks the icon button.
 	menuEditorNode.on('click', '.ws_select_icon', function() {
@@ -2834,7 +3741,23 @@ function ameOnDomReady() {
 		var cssClass = getFieldValue(menuItem, 'css_class', '');
 		var iconUrl = getFieldValue(menuItem, 'icon_url', '', containerNode);
 
+		//Clear the search box and restore icons that were hidden by a previous search.
+		const $searchBoxes = iconSelector.find('.ws_icon_search_box');
+		$searchBoxes.each(function() {
+			const $this = $(this);
+			if ($this.val() !== '') {
+				$this.val('');
+				//Let's call the search handler directly instead of using $.trigger('keyup').
+				//The event handler is throttled and might not run until later.
+				searchMenuIcons('', $this.closest('.ws_tool_tab'));
+			}
+		});
+
 		var customImageOption = iconSelector.find('.ws_custom_image_icon').hide();
+		iconSelector.data('ame-item-has-custom-image', false);
+
+		svgIconField.val('');
+		let hasValidSvgIconCode = false;
 
 		//Highlight the currently selected icon.
 		iconSelector.find('.ws_selected_icon').removeClass('ws_selected_icon');
@@ -2843,6 +3766,8 @@ function ameOnDomReady() {
 		var classMatches = cssClass.match(/\b(ame-)?menu-icon-([^\s]+)\b/);
 		//Dashicons and FontAwesome icons are set via the icon URL field, but they are actually CSS-based.
 		var iconFontMatches = iconUrl && iconUrl.match('^\s*((?:dashicons|ame-fa)-[a-z0-9\-]+)\s*$');
+		//Is it an SVG icon?
+		const svgIconMatches = iconUrl && iconUrl.trimStart().startsWith(svgIconPrefix);
 
 		if ( iconUrl && iconUrl !== 'none' && iconUrl !== 'div' && !iconFontMatches ) {
 			var currentIcon = iconSelector.find('.ws_icon_option img[src="' + iconUrl + '"]').first().closest('.ws_icon_option');
@@ -2852,7 +3777,19 @@ function ameOnDomReady() {
 				//Display and highlight the custom image.
 				customImageOption.find('img').prop('src', iconUrl);
 				customImageOption.addClass('ws_selected_icon').show().data('icon-url', iconUrl);
+				iconSelector.data('ame-item-has-custom-image', true);
 				selectedIcon = customImageOption;
+			}
+
+			if (svgIconMatches) {
+				//Decode the base64-encoded icon and put it in the SVG code field for editing.
+				try {
+					const svgCode = atob(iconUrl.trim().substring(svgIconPrefix.length));
+					svgIconField.val(svgCode);
+					hasValidSvgIconCode = true;
+				} catch (e) {
+					//If the icon is invalid, just leave the SVG code field empty.
+				}
 			}
 		} else if ( classMatches || iconFontMatches ) {
 			//Highlight the icon that corresponds to the current CSS class or Dashicon/FontAwesome icon.
@@ -2861,13 +3798,33 @@ function ameOnDomReady() {
 		}
 
 		//Activate the tab that contains the icon.
-		var activeTabId = selectedIcon.closest('.ws_tool_tab').prop('id'),
-			activeTabItem = iconSelectorTabs.find('a[href="#' + activeTabId + '"]').closest('li');
+		let activeTabId = 'ws_core_icons_tab';
+
+		const hasCustomSvgIcon = hasValidSvgIconCode && (typeof menuItem['icon_url'] === 'string');
+		if (hasCustomSvgIcon) {
+			activeTabId = 'ws_svg_icon_tab';
+		} else if (selectedIcon !== null) {
+			const selectedIconTabId = selectedIcon.closest('.ws_tool_tab').prop('id');
+			if (selectedIconTabId) {
+				activeTabId = selectedIconTabId;
+			}
+		}
+
+		const activeTabItem = iconSelectorTabs.find('a[href="#' + activeTabId + '"]').closest('li');
 		if (activeTabItem.length > 0) {
 			iconSelectorTabs.tabs('option', 'active', activeTabItem.index());
 		}
 
+		//Before showing the selector, clear the fixed height that was set when it was last visible.
+		iconSelector.css('height', '');
+
 		iconSelector.show();
+
+		//Set a fixed height while the selector is visible. This prevents the selector's
+		//height from changing when the user filters the icon list.
+		const initialHeight = iconSelector.height();
+		iconSelector.css('height', initialHeight);
+
 		iconSelector.position({ //Requires jQuery UI.
 			my: 'left top',
 			at: 'left bottom',
@@ -2877,9 +3834,9 @@ function ameOnDomReady() {
 
 	//Alternatively, use the WordPress media uploader to select a custom icon.
 	//This code is based on the header selection script in /wp-admin/js/custom-header.js.
-	$('#ws_choose_icon_from_media').click(function(event) {
+	var mediaFrame = null;
+	$('#ws_choose_icon_from_media').on('click', function(event) {
 		event.preventDefault();
-		var frame = null;
 
 		//This option is not usable on the demo site since the filesystem is usually read-only.
 		if (wsEditorData.isDemoMode) {
@@ -2888,13 +3845,13 @@ function ameOnDomReady() {
 		}
 
         //If the media frame already exists, reopen it.
-        if ( frame ) {
-            frame.open();
+        if ( mediaFrame !== null ) {
+            mediaFrame.open();
             return;
         }
 
         //Create a custom media frame.
-        frame = wp.media.frames.customAdminMenuIcon = wp.media({
+        mediaFrame = wp.media.frames.customAdminMenuIcon = wp.media({
             //Set the title of the modal.
             title: 'Choose a Custom Icon (20x20)',
 
@@ -2911,9 +3868,9 @@ function ameOnDomReady() {
         });
 
         //When an image is selected, set it as the menu icon.
-        frame.on( 'select', function() {
+        mediaFrame.on( 'select', function() {
             //Grab the selected attachment.
-            var attachment = frame.state().get('selection').first();
+            var attachment = mediaFrame.state().get('selection').first();
             //TODO: Warn the user if the image exceeds 20x20 pixels.
 
 	        //Set the menu icon to the attachment URL.
@@ -2935,11 +3892,11 @@ function ameOnDomReady() {
         });
 
 		//If the user closes the frame by via Esc or the "X" button, clear up state.
-		frame.on('escape', function(){
+		mediaFrame.on('escape', function(){
 			currentIconButton = null;
 		});
 
-        frame.open();
+        mediaFrame.open();
 		iconSelector.hide();
 	});
 
@@ -2960,6 +3917,49 @@ function ameOnDomReady() {
 		}
 	});
 
+	//Provide search-as-you-type functionality for the icon selector.
+	function searchMenuIcons(query, $currentTab) {
+		let $searchableItems = $currentTab.find('.ws_icon_option');
+		//If the current menu item doesn't have a custom image, exclude the custom image
+		//option from the search results.
+		if (!iconSelector.data('ame-item-has-custom-image')) {
+			$searchableItems = $searchableItems.not('.ws_custom_image_icon');
+		}
+
+		let foundAnything = false;
+
+		$searchableItems.each(function() {
+			const $icon = $(this);
+			const name = $icon.prop('title').toLowerCase();
+
+			if (name.includes(query)) {
+				$icon.show();
+				foundAnything = true;
+			} else {
+				$icon.hide();
+			}
+		});
+
+		$currentTab.find('.ws_no_matching_icons').toggle(!foundAnything);
+	}
+
+	iconSelectorTabs.find('.ws_icon_search_box').on('keyup', _.throttle(
+		function() {
+			const $inputField = $(this);
+			const $tab = $inputField.closest('.ws_tool_tab');
+
+			searchMenuIcons($inputField.val().toLowerCase().trim(), $tab);
+		},
+		250
+	));
+
+	$('#ws_apply_svg_icon').on('click', function() {
+		//Encode the SVG code and set it as the new icon URL, then close the icon selector.
+		//If the code is empty, just clear the icon URL to remove the icon.
+		const svgCode = svgIconField.val().trim();
+		const newIconUrl = svgCode ? (svgIconPrefix + btoa(svgCode)) : '';
+		applyIconFromSelector(null, newIconUrl, svgCode === '');
+	});
 
 	/*************************************************************************
 	                        Embedded page selector
@@ -3152,408 +4152,143 @@ function ameOnDomReady() {
 		}
 	});
 
-
 	/*************************************************************************
-	                             Color picker
+	                  Unsaved changes indicator
 	 *************************************************************************/
 
-	var menuColorDialog = $('#ws-ame-menu-color-settings');
-	if (menuColorDialog.length > 0) {
-		menuColorDialog.dialog({
-			autoOpen: false,
-			closeText: ' ',
-			draggable: false,
-			modal: true,
-			minHeight: 400,
-			minWidth: 520
-		});
+	/**
+	 * @param {JQuery} $rootNode
+	 * @constructor
+	 */
+	function AmeUnsavedChangesIndicator($rootNode) {
+		this.rootNode = $rootNode;
+		this.reportedUnsavedChanges = 0;
+
+		$(document)
+			.on('adminMenuEditor:menuConfigChanged', () => {
+				this.reportedUnsavedChanges++;
+				this.update();
+			})
+			.on('menuConfigurationLoaded.adminMenuEditor', () => {
+				this.reportedUnsavedChanges = 0;
+				this.update();
+			});
 	}
 
-	var colorDialogState = {
-		menuItem: null,
-		editingGlobalColors: false
+	AmeUnsavedChangesIndicator.prototype.update = function() {
+		const hasUnsavedChanges = this.reportedUnsavedChanges > 0;
+		this.rootNode.toggleClass('ws_ame_has_unsaved_changes', hasUnsavedChanges);
+
+		const $saveButton = this.rootNode.find('#ws_save_menu');
+		if (hasUnsavedChanges) {
+			$saveButton.attr('title', 'Click to save pending changes');
+		} else {
+			$saveButton.attr('title', '');
+		}
 	};
 
-	var menuColorVariables = [
-		'base-color',
-		'text-color',
-		'highlight-color',
-		'icon-color',
+	new AmeUnsavedChangesIndicator(menuEditorNode);
 
-		'menu-highlight-text',
-		'menu-highlight-icon',
-		'menu-highlight-background',
-
-		'menu-current-text',
-		'menu-current-icon',
-		'menu-current-background',
-
-		'menu-submenu-text',
-		'menu-submenu-background',
-		'menu-submenu-focus-text',
-		'menu-submenu-current-text',
-
-		'menu-bubble-text',
-		'menu-bubble-background',
-		'menu-bubble-current-text',
-		'menu-bubble-current-background'
-	];
-
-	var colorPresetDropdown = $('#ame-menu-color-presets'),
-		colorPresetDeleteButton = $("#ws-ame-delete-color-preset"),
-		areColorChangesIgnored = false;
-
-	//Show only the primary color settings by default.
-	var showAdvancedColors = false;
-	$('#ws-ame-show-advanced-colors').click(function() {
-		showAdvancedColors = !showAdvancedColors;
-		$('#ws-ame-menu-color-settings').find('.ame-advanced-menu-color').toggle(showAdvancedColors);
-		$(this).text(showAdvancedColors ? 'Hide advanced options' : 'Show advanced options');
-	});
-
-	var colorPickersInitialized = false;
-	function setUpColorDialog(dialogTitle) {
-		//Initializing the color pickers takes a while, so we only do it when needed instead of on document ready.
-		if ( !colorPickersInitialized ) {
-			menuColorDialog.find('.ame-color-picker').wpColorPicker({
-				//Deselect the current preset when the user changes any of the color options.
-				change: deselectPresetOnColorChange,
-				clear: deselectPresetOnColorChange
-			});
-			colorPickersInitialized = true;
-		}
-
-		//Populate presets and deselect the previously selected option.
-		colorPresetDropdown.val('');
-		if (!wasPresetDropdownPopulated) {
-			populatePresetDropdown();
-			wasPresetDropdownPopulated = true;
-		}
-
-		//Update the dialog title.
-		menuColorDialog.dialog('option', 'title', dialogTitle);
-	}
-
-	//"Edit.." color schemes.
-	menuEditorNode.on('click', '.ws_open_color_editor, .ws_color_scheme_display', function() {
-		var containerNode = $(this).parents('.ws_container').first();
-		var menuItem = containerNode.data('menu_item');
-
-		colorDialogState.containerNode = containerNode;
-		colorDialogState.menuItem = menuItem;
-		colorDialogState.editingGlobalColors = false;
-
-		//Add menu title to the dialog caption.
-		var title = getFieldValue(menuItem, 'menu_title', null);
-		setUpColorDialog(title ? ('Colors: ' + formatMenuTitle(title)) : 'Colors');
-
-		//Show the [global] preset only if the user has set it up.
-		var globalPresetExists = colorPresets.hasOwnProperty('[global]');
-		menuColorDialog.find('#ame-global-colors-preset').toggle(globalPresetExists);
-
-		var colors = getFieldValue(menuItem, 'colors', {}),
-			colorsToDisplay = colors || {};
-		if (_.isEmpty(colors)) {
-			//Normalization. No custom colors = use default colors, and null is used to indicate default settings.
-			menuItem.colors = null;
-			//If no custom colors, select and display the global preset.
-			if (globalPresetExists) {
-				colorsToDisplay = colorPresets['[global]'];
-				colorPresetDropdown.val('[global]');
-				colorPresetDeleteButton.hide();
-			}
-		}
-		displayColorSettingsInDialog(colorsToDisplay);
-
-		menuColorDialog.dialog('open');
-	});
-
-	//The "Colors" button in the main sidebar.
-	$('#ws_edit_global_colors').click(function() {
-		colorDialogState.editingGlobalColors = true;
-		colorDialogState.menuItem = null;
-		colorDialogState.containerNode = null;
-
-		setUpColorDialog('Default menu colors');
-		displayColorSettingsInDialog(_.get(colorPresets, '[global]', {}));
-
-		//Hide the [global] preset. We'll be editing it.
-		menuColorDialog.find('#ame-global-colors-preset').hide();
-
-		menuColorDialog.dialog('open');
-	});
-
-	function getColorSettingsFromDialog() {
-		var colors = {}, colorCount = 0;
-
-		for (var i = 0; i < menuColorVariables.length; i++) {
-			var name = menuColorVariables[i];
-			var value = $('#ame-color-' + name).val();
-			if (value) {
-				colors[name] = value;
-				colorCount++;
-			}
-		}
-
-		if (colorCount > 0) {
-			return colors;
-		} else {
-			return null;
-		}
-	}
-
-	function displayColorSettingsInDialog(colors) {
-		//noinspection JSUnusedAssignment
-		areColorChangesIgnored = true;
-		var customColorCount = 0;
-
-		for (var i = 0; i < menuColorVariables.length; i++) {
-			var name = menuColorVariables[i];
-			var value = colors.hasOwnProperty(name) ? colors[name] : false;
-
-			if ( value ) {
-				$('#ame-color-' + name).wpColorPicker('color', value);
-				customColorCount++;
-			} else {
-				$('#ame-color-' + name).closest('.wp-picker-container').find('.wp-picker-clear').click();
-			}
-		}
-
-		areColorChangesIgnored = false;
-		return customColorCount;
-	}
-
-	//The "Save Changes" button in the color dialog.
-	$('#ws-ame-save-menu-colors').click(function() {
-		menuColorDialog.dialog('close');
-		var colors = getColorSettingsFromDialog();
-
-		if ( colorDialogState.editingGlobalColors ) {
-			if (colors === null) {
-				delete colorPresets['[global]'];
-			} else {
-				colorPresets['[global]'] = colors;
-			}
-		} else if ( colorDialogState.menuItem ) {
-			var menuItem = colorDialogState.menuItem;
-			//If colors match the global settings, reset them to null. Using the [global] preset is the default.
-			if (_.has(colorPresets, '[global]') && _.isEqual(colors, colorPresets['[global]'])) {
-				menuItem.colors = null;
-			} else {
-				menuItem.colors = colors;
-			}
-			updateItemEditor(colorDialogState.containerNode);
-		}
-
-		colorDialogState.containerNode = null;
-		colorDialogState.menuItem = null;
-		colorDialogState.editingGlobalColors = false;
-	});
-
-	//The "Apply to All" button in the same dialog.
-	$('#ws-ame-apply-colors-to-all').click(function() {
-		if (!confirm('Apply these color settings to ALL top level menus?')) {
-			return;
-		}
-
-		//Set this as the global preset and remove custom settings from all items.
-		var newColors = getColorSettingsFromDialog();
-		if (newColors === null) {
-			delete colorPresets['[global]'];
-		} else {
-			colorPresets['[global]'] = newColors;
-		}
-		$('#ws_menu_box').find('.ws_menu').each(function() {
-			var containerNode = $(this),
-				menuItem = containerNode.data('menu_item');
-			if (!menuItem.separator) {
-				menuItem.colors = null;
-				updateItemEditor(containerNode);
-			}
-		});
-
-		menuColorDialog.dialog('close');
-		colorDialogState.containerNode = null;
-		colorDialogState.menuItem = null;
-	});
-
-	function addColorPreset(name, colors) {
-		colorPresets[name] = colors;
-		populatePresetDropdown();
-		colorPresetDropdown.val(name);
-		colorPresetDeleteButton.removeClass('hidden');
-	}
-
-	function deleteColorPreset(name) {
-		delete colorPresets[name];
-		populatePresetDropdown();
-		colorPresetDropdown.val('');
-		colorPresetDeleteButton.addClass('hidden');
-	}
-
-	function populatePresetDropdown() {
-		var separator = colorPresetDropdown.find('#ame-color-preset-separator');
-
-		//Delete the old options, but keep the "save preset" option and so on.
-		colorPresetDropdown.find('option').not('.ame-meta-option').remove();
-
-		//Sort presets alphabetically.
-		var presetNames = $.map(colorPresets, function(unused, name) {
-			return name;
-		}).sort(function(a, b) {
-			return a.localeCompare(b);
-		});
-
-		//Add them all to the dropdown.
-		var newOptions = jQuery([]);
-		$.each(presetNames, function(unused, name) {
-			if (name === '[global]') {
-				return;
-			}
-
-			newOptions = newOptions.add($('<option>', {
-				val: name,
-				text: name
-			}));
-		});
-		newOptions.insertBefore(separator);
-	}
-
-	function deselectPresetOnColorChange() {
-		//Most jQuery widgets don't trigger change events when you update them via JavaScript,
-		//but apparently wpColorPicker does. We want to ignore those superfluous events.
-		if (!areColorChangesIgnored && (colorPresetDropdown.val() !== '')) {
-			colorPresetDropdown.val('');
-		}
-	}
-
-	colorPresetDropdown.change(function() {
-		var dropdown = $(this),
-			presetName = dropdown.val();
-
-		colorPresetDeleteButton.toggleClass('hidden', _.includes(['[save_preset]', '[global]', '', null], presetName));
-
-		if ((presetName === '[save_preset]') && menuColorDialog.dialog('isOpen')) {
-			//Create a new preset.
-			var colors = getColorSettingsFromDialog();
-			if (colors === null) {
-				dropdown.val('');
-				alert('Error: No colors selected');
-				return;
-			}
-
-			var newPresetName = window.prompt('New preset name:', '');
-			if ((newPresetName === null) || (jsTrim(newPresetName) === '')) {
-				dropdown.val('');
-				return;
-			}
-
-			addColorPreset(newPresetName, colors);
-		} else if (presetName !== '') {
-			//Apply the selected preset.
-			var preset = colorPresets[presetName];
-			displayColorSettingsInDialog(preset);
-		}
-	});
-
-	colorPresetDeleteButton.click(function() {
-		var presetName = $('#ame-menu-color-presets').val();
-		if ( _.includes(['[save_preset]', '[global]', '', null], presetName) ) {
-			return false;
-		}
-		if (!confirm('Are you sure you want to delete the preset "' + presetName + '"?')) {
-			return false;
-		}
-
-		deleteColorPreset(presetName);
-		return false;
-	});
+//region Toolbar buttons
 
     /*************************************************************************
 	                           Menu toolbar buttons
 	 *************************************************************************/
     function getSelectedMenu() {
-	    return $('#ws_menu_box').find('.ws_active');
+	    return menuPresenter.getColumnImmediate(1).getSelectedItem();
     }
+    AmeEditorApi.getSelectedMenu = getSelectedMenu;
 
 	//Show/Hide menu
-	$('#ws_hide_menu').click(function (event) {
-		event.preventDefault();
+	menuEditorNode.on(
+		'adminMenuEditor:action-hide',
+		/**
+		 * @param event
+		 * @param {JQuery|null} selectedItem
+		 * @param {AmeEditorColumn} column
+		 */
+		function(event, selectedItem, column) {
+			const selection = column.getSelectedItem();
+			if (selection.length < 1) {
+				return;
+			}
 
-		//Get the selected menu
-		var selection = getSelectedMenu();
-		if (!selection.length) {
-			return;
+			toggleItemHiddenFlag(selection);
 		}
-
-		toggleItemHiddenFlag(selection);
-	});
+	);
 
 	//Hide a menu and deny access.
-	menuEditorNode.find('.ws_toolbar').on('click', '.ws_hide_and_deny_button', function() {
-		var $box = $(this).closest('.ws_main_container').find('.ws_box'),
-			selection = $box.is('#ws_menu_box') ? getSelectedMenu() : getSelectedSubmenuItem();
-		if (selection.length < 1) {
-			return;
-		}
+	menuEditorNode.on(
+		'adminMenuEditor:action-deny',
+		/**
+		 * @param event
+		 * @param {JQuery|null} selectedItem
+		 * @param {AmeEditorColumn} column
+		 */
+		function(event, selectedItem, column) {
+			const selection = column.getSelectedItem();
+			if (selection.length < 1) {
+				return;
+			}
 
-		function objectFillKeys(keys, value) {
-			var result = {};
-			_.forEach(keys, function(key) {
-				result[key] = value;
-			});
-			return result;
-		}
+			function objectFillKeys(keys, value) {
+				let result = {};
+				_.forEach(keys, function(key) {
+					result[key] = value;
+				});
+				return result;
+			}
 
-		if (actorSelectorWidget.selectedActor === null) {
-			//Hide from everyone except Super Admin and the current user.
-			var menuItem = selection.data('menu_item'),
-				validActors = _.keys(wsEditorData.actors),
-				alwaysAllowedActors = _.intersection(
-					['special:super_admin', 'user:' + wsEditorData.currentUserLogin],
-					validActors
-				),
-				victims = _.difference(validActors, alwaysAllowedActors),
-				shouldHide;
+			if (actorSelectorWidget.selectedActor === null) {
+				//Hide from everyone except Super Admin and the current user.
+				let menuItem = selection.data('menu_item'),
+					validActors = _.keys(wsEditorData.actors),
+					alwaysAllowedActors = _.intersection(
+						['special:super_admin', 'user:' + wsEditorData.currentUserLogin],
+						validActors
+					),
+					victims = _.difference(validActors, alwaysAllowedActors),
+					shouldHide;
 
-			//First, lets check who has access. Maybe this item is already hidden from the victims.
-			shouldHide = _.some(victims, _.curry(actorCanAccessMenu, 2)(menuItem));
+				//First, let's check who has access. Maybe this item is already hidden from the victims.
+				shouldHide = _.some(victims, _.curry(actorCanAccessMenu, 2)(menuItem));
 
-			var keepEnabled = objectFillKeys(alwaysAllowedActors, true),
-				hideAllExceptAllowed = _.assign(objectFillKeys(victims, false), keepEnabled);
+				let keepEnabled = objectFillKeys(alwaysAllowedActors, true),
+					hideAllExceptAllowed = _.assign(objectFillKeys(victims, false), keepEnabled);
 
-			walkMenuTree(selection, function(container, item) {
-				var newAccess;
-				if (shouldHide) {
-					//Yay, hide it now!
-					newAccess = hideAllExceptAllowed;
-					//Only update had_access_before_hiding if this item isn't hidden yet or the field is missing.
-					//We don't want to double-hide an item.
-					var actorsWithAccess = _.filter(victims, function(actor) {
-						return actorCanAccessMenu(item, actor);
-					});
-					if ((actorsWithAccess.length) > 0 || _.isEmpty(_.get(item, 'had_access_before_hiding', null))) {
-						item.had_access_before_hiding = actorsWithAccess;
+				walkMenuTree(selection, function(container, item) {
+					let newAccess;
+					if (shouldHide) {
+						//Yay, hide it now!
+						newAccess = hideAllExceptAllowed;
+						//Only update had_access_before_hiding if this item isn't hidden yet or the field is missing.
+						//We don't want to double-hide an item.
+						let actorsWithAccess = _.filter(victims, function(actor) {
+							return actorCanAccessMenu(item, actor);
+						});
+						if ((actorsWithAccess.length) > 0 || _.isEmpty(_.get(item, 'had_access_before_hiding', null))) {
+							item.had_access_before_hiding = actorsWithAccess;
+						}
+					} else {
+						//Give back access to the roles and users who previously had access.
+						//Careful, don't give access to roles that no longer exist.
+						let actorsWhoHadAccess = _.get(item, 'had_access_before_hiding', []) || [];
+						actorsWhoHadAccess = _.intersection(actorsWhoHadAccess, validActors);
+
+						newAccess = _.assign(objectFillKeys(actorsWhoHadAccess, true), keepEnabled);
+						delete item.had_access_before_hiding;
 					}
-				} else {
-					//Give back access to the roles and users who previously had access.
-					//Careful, don't give access to roles that no longer exist.
-					var actorsWhoHadAccess = _.get(item, 'had_access_before_hiding', []) || [];
-					actorsWhoHadAccess = _.intersection(actorsWhoHadAccess, validActors);
 
-					newAccess = _.assign(objectFillKeys(actorsWhoHadAccess, true), keepEnabled);
-					delete item.had_access_before_hiding;
-				}
+					setActorAccess(container, newAccess);
+					updateItemEditor(container);
+				});
 
-				setActorAccess(container, newAccess);
-				updateItemEditor(container);
-			});
-
-		} else {
-			//Just toggle the checkbox.
-			selection.find('input.ws_actor_access_checkbox').click();
+			} else {
+				//Just toggle the checkbox.
+				selection.find('input.ws_actor_access_checkbox').trigger('click');
+			}
 		}
-	});
+	);
 
 	//Delete error dialog. It shows up when the user tries to delete one of the default menus.
 	var menuDeletionDialog = $('#ws-ame-menu-deletion-error').dialog({
@@ -3584,7 +4319,7 @@ function ameOnDomReady() {
 
 		function hideRecursively(containerNode, exceptActor) {
 			var otherActors = _(actorSelectorWidget.getVisibleActors())
-				.pluck('id')
+				.map('id')
 				.without(exceptActor)
 				.value();
 
@@ -3626,52 +4361,18 @@ function ameOnDomReady() {
 	};
 
 	//Callbacks for each of the dialog buttons.
-	$('#ws_cancel_menu_deletion').click(function() {
+	$('#ws_cancel_menu_deletion').on('click', function() {
 		menuDeletionCallback(false);
 	});
-	$('#ws_hide_menu_from_everyone').click(function() {
+	$('#ws_hide_menu_from_everyone').on('click', function() {
 		menuDeletionCallback('all');
 	});
-	$('#ws_hide_menu_except_current_user').click(function() {
+	const $hideExceptCurrentUser = $('#ws_hide_menu_except_current_user').on('click', function() {
 		menuDeletionCallback('except_current_user');
 	});
-	$('#ws_hide_menu_except_administrator').click(function() {
+	const $hideExceptAdmin = $('#ws_hide_menu_except_administrator').on('click', function() {
 		menuDeletionCallback('except_administrator');
 	});
-
-	/**
-	 * Check if it's possible to delete a menu item.
-	 *
-	 * @param {JQuery} containerNode
-	 * @returns {boolean}
-	 */
-	function canDeleteItem(containerNode) {
-		if (!containerNode || (containerNode.length < 1)) {
-			return false;
-		}
-
-		var menuItem = containerNode.data('menu_item');
-		var isDefaultItem =
-			( menuItem.template_id !== '')
-			&& ( menuItem.template_id !== wsEditorData.unclickableTemplateId)
-			&& ( menuItem.template_id !== wsEditorData.embeddedPageTemplateId)
-			&& (!menuItem.separator);
-
-		var otherCopiesExist = false;
-		if (isDefaultItem) {
-			//Check if there are any other menus with the same template ID.
-			$('#ws_menu_editor').find('.ws_container').each(function() {
-				var otherItem = $(this).data('menu_item');
-				if ((menuItem !== otherItem) && (menuItem.template_id === otherItem.template_id)) {
-					otherCopiesExist = true;
-					return false;
-				}
-				return true;
-			});
-		}
-
-		return (!isDefaultItem || otherCopiesExist);
-	}
 
 	/**
 	 * Attempt to delete a menu item. Will check if the item can actually be deleted and ask the user for confirmation.
@@ -3695,8 +4396,8 @@ function ameOnDomReady() {
 
 			//Different versions get slightly different options because only the Pro version has
 			//role-specific permissions.
-			$('#ws_hide_menu_except_current_user').toggleClass('hidden', !wsEditorData.wsMenuEditorPro);
-			$('#ws_hide_menu_except_administrator').toggleClass('hidden', wsEditorData.wsMenuEditorPro);
+			$hideExceptCurrentUser.toggleClass('hidden', !wsEditorData.wsMenuEditorPro);
+			$hideExceptAdmin.toggleClass('hidden', wsEditorData.wsMenuEditorPro);
 
 			menuDeletionDialog.dialog('open');
 
@@ -3705,17 +4406,12 @@ function ameOnDomReady() {
 		}
 
 		if (shouldDelete) {
-			//Delete this menu's submenu first, if any.
-			var submenuId = selection.data('submenu_id');
-			if (submenuId) {
-				$('#' + submenuId).remove();
-			}
-			var parentSubmenu = selection.closest('.ws_submenu');
+			const parentSubmenu = selection.closest('.ws_submenu');
 
 			//Delete the menu.
-			selection.remove();
+			menuPresenter.destroyItem(selection);
 
-			if (parentSubmenu) {
+			if (parentSubmenu && (parentSubmenu.length > 0)) {
 				//Refresh permissions UI for this menu's parent (if any).
 				updateParentAccessUi(parentSubmenu);
 			}
@@ -3723,172 +4419,206 @@ function ameOnDomReady() {
 	}
 
 	//Delete menu
-	$('#ws_delete_menu').click(function (event) {
-		event.preventDefault();
+	menuEditorNode.on(
+		'adminMenuEditor:action-delete',
+		/**
+		 * @param event
+		 * @param {JQuery|null} selectedItem
+		 * @param {AmeEditorColumn} column
+		 */
+		function(event, selectedItem, column) {
+			const selection = column.getSelectedItem();
+			if (selection.length < 1) {
+				return;
+			}
 
-		//Get the selected menu
-		var selection = getSelectedMenu();
-		if (!selection.length) {
-			return;
+			tryDeleteItem(selection);
 		}
-
-		tryDeleteItem(selection);
-	});
+	);
 
 	//Copy menu
-	$('#ws_copy_menu').click(function (event) {
-		event.preventDefault();
+	menuEditorNode.on(
+		'adminMenuEditor:action-copy',
 
-		//Get the selected menu
-		var selection = $('#ws_menu_box').find('.ws_active');
-		if (!selection.length) {
-			return;
+		/**
+		 * @param event
+		 * @param {JQuery|null} selectedItem
+		 */
+		function (event, selectedItem) {
+			//Get the selected menu
+			if (!selectedItem || (selectedItem.lengt < 1)) {
+				return;
+			}
+
+			//Store a copy of the current menu state in clipboard
+			menu_in_clipboard = readItemState(selectedItem);
 		}
-
-		//Store a copy of the current menu state in clipboard
-		menu_in_clipboard = readItemState(selection);
-	});
+	);
 
 	//Cut menu
-	$('#ws_cut_menu').click(function (event) {
-		event.preventDefault();
+	menuEditorNode.on(
+		'adminMenuEditor:action-cut',
 
-		//Get the selected menu
-		var selection = $('#ws_menu_box').find('.ws_active');
-		if (!selection.length) {
-			return;
+		/**
+		 * @param event
+		 * @param {JQuery|null} selectedItem
+		 * @param {AmeEditorColumn} column
+		 */
+		function (event, selectedItem, column) {
+			if (selectedItem === null) {
+				alert('Please select a menu item first.');
+				return;
+			}
+			const submenu = selectedItem.closest('.ws_submenu');
+
+			//Store a copy of the current menu state in clipboard
+			menu_in_clipboard = readItemState(selectedItem);
+
+			//Remove the original menu and submenu
+			column.destroyItem(selectedItem);
+
+			//If this submenu had mixed permissions, that might have changed now that the item is gone.
+			updateParentAccessUi(submenu);
 		}
+	);
 
-		//Store a copy of the current menu state in clipboard
-		menu_in_clipboard = readItemState(selection);
+	menuEditorNode.on(
+		'adminMenuEditor:action-paste',
+		/**
+		 * @param event
+		 * @param {JQuery|null} selectedItem
+		 * @param {AmeEditorColumn} column
+		 */
+		function(event, selectedItem, column) {
+			//Check if anything has been copied/cut
+			if (!menu_in_clipboard) {
+				return;
+			}
 
-		//Remove the original menu and submenu
-		$('#'+selection.data('submenu_id')).remove();
-		selection.remove();
-	});
+			//You can only add separators to submenus in the Pro version.
+			if ( menu_in_clipboard.separator && !wsEditorData.wsMenuEditorPro ) {
+				return;
+			}
 
-	//Paste menu
-	function pasteMenu(menu, afterMenu) {
-		//The user shouldn't need to worry about giving separators a unique filename.
-		if (menu.separator) {
-			menu.defaults.file = randomMenuId('separator_');
+			const copyOfItem = $.extend(true, {}, menu_in_clipboard);
+
+			//Paste the menu after the selection.
+			column.pasteItem(copyOfItem, selectedItem);
 		}
-
-		//If we're pasting from a sub-menu, we may need to fix some properties
-		//that are blank for sub-menu items but required for top-level menus.
-		if (getFieldValue(menu, 'css_class', '') == '') {
-			menu.css_class = 'menu-top';
-		}
-		if (getFieldValue(menu, 'icon_url', '') == '') {
-			menu.icon_url = 'dashicons-admin-generic';
-		}
-		if (getFieldValue(menu, 'hookname', '') == '') {
-			menu.hookname = randomMenuId();
-		}
-
-		//Paste the menu after the specified one, or at the end of the list.
-		if (afterMenu) {
-			return outputTopMenu(menu, afterMenu);
-		} else {
-			return outputTopMenu(menu);
-		}
-	}
-
-	$('#ws_paste_menu').click(function (event) {
-		event.preventDefault();
-
-		//Check if anything has been copied/cut
-		if (!menu_in_clipboard) {
-			return;
-		}
-
-		var menu = $.extend(true, {}, menu_in_clipboard);
-
-		//Get the selected menu
-		var selection = $('#ws_menu_box').find('.ws_active');
-		//Paste the menu after the selection.
-		pasteMenu(menu, (selection.length > 0) ? selection : null);
-	});
+	);
 
 	//New menu
-	$('#ws_new_menu').click(function (event) {
-		event.preventDefault();
+	menuEditorNode.on(
+		'adminMenuEditor:action-new-menu',
+		/**
+		 * @param event
+		 * @param {JQuery|null} selectedItem
+		 * @param {AmeEditorColumn} column
+		 */
+		function(event, selectedItem, column) {
+			const visibleList = column.getVisibleItemList();
+			if (!visibleList || (visibleList.length < 1)) {
+				//Abort if there's no item list in this column. This can happen if nothing is selected
+				//in the previous column.
+				return;
+			}
 
-		ws_paste_count++;
+			ws_paste_count++;
 
-		//The new menu starts out rather bare
-		var randomId = randomMenuId();
-		var menu = $.extend(true, {}, wsEditorData.blankMenuItem, {
-			custom: true, //Important : flag the new menu as custom, or it won't show up after saving.
-			template_id : '',
-			menu_title : 'Custom Menu ' + ws_paste_count,
-			file : randomId,
-			items: []
-		});
-		menu.defaults = $.extend(true, {}, itemTemplates.getDefaults(''));
+			//The new menu starts out rather bare.
+			let item = $.extend(true, {}, wsEditorData.blankMenuItem, {
+				custom: true, //Important : flag the new menu as custom, or it won't show up after saving.
+				template_id: '',
+				menu_title: 'Custom Menu ' + ws_paste_count,
+				file: randomMenuId(),
+				items: []
+			});
+			item.defaults = $.extend(true, {}, itemTemplates.getDefaults(''));
 
-		//Make it accessible only to the current actor if one is selected.
-		if (actorSelectorWidget.selectedActor !== null) {
-			denyAccessForAllExcept(menu, actorSelectorWidget.selectedActor);
+			//Top-level menus automatically get the "menu-top" class.
+			if (column.level <= 1) {
+				item['css_class'] = 'menu-top';
+			}
+
+			//Make it accessible only to the current actor if one is selected.
+			if (actorSelectorWidget.selectedActor !== null) {
+				denyAccessForAllExcept(item, actorSelectorWidget.selectedActor);
+			}
+
+			//Insert the new menu item.
+			let selection = column.getSelectedItem();
+			if (!selection || (selection.length < 1)) {
+				selection = null;
+			}
+			let result = column.outputItem(item, selection);
+
+			if (result && result.menu) {
+				//The menu's editbox is always open
+				result.menu.find('.ws_edit_link').trigger('click');
+
+				updateParentAccessUi(result.menu);
+			}
 		}
-
-		//Insert the new menu
-		var selection = $('#ws_menu_box').find('.ws_active');
-		var result = outputTopMenu(menu, (selection.length > 0) ? selection : null);
-
-		//The menus's editbox is always open
-		result.menu.find('.ws_edit_link').click();
-	});
+	);
 
 	//New separator
-	$('#ws_new_separator, #ws_new_submenu_separator').click(function (event) {
-		event.preventDefault();
-
-		ws_paste_count++;
-
-		//The new menu starts out rather bare
-		var randomId = randomMenuId('separator_');
-		var menu = $.extend(true, {}, wsEditorData.blankMenuItem, {
-			separator: true, //Flag as a separator
-			custom: false,   //Separators don't need to flagged as custom to be retained.
-			items: [],
-			defaults: {
-				separator: true,
-				css_class : 'wp-menu-separator',
-				access_level : 'read',
-				file : randomId,
-				hookname : randomId
+	menuEditorNode.on(
+		'adminMenuEditor:action-new-separator',
+		/**
+		 * @param event
+		 * @param {JQuery|null} selectedItem
+		 * @param {AmeEditorColumn} column
+		 */
+		function(event, selectedItem, column) {
+			const visibleList = column.getVisibleItemList();
+			if (!visibleList || (visibleList.length < 1)) {
+				//Abort if there's no item list in this column. This can happen if nothing is selected
+				//in the previous column.
+				return;
 			}
-		});
 
-		if ( $(this).attr('id').indexOf('submenu') === -1 ) {
-			//Insert in the top-level menu.
-			var selection = $('#ws_menu_box').find('.ws_active');
-			outputTopMenu(menu, (selection.length > 0) ? selection : null);
-		} else {
-			//Insert in the currently visible submenu.
-			pasteItem(menu);
+			ws_paste_count++;
+
+			const randomId = randomMenuId('separator_');
+			let item = $.extend(true, {}, wsEditorData.blankMenuItem, {
+				separator: true, //Flag as a separator
+				custom: false,   //Separators don't need to flagged as custom to be retained.
+				items: [],
+				defaults: {
+					separator: true,
+					css_class : 'wp-menu-separator',
+					access_level : 'read',
+					file : randomId,
+					hookname : randomId
+				}
+			});
+
+			const selection = column.getSelectedItem();
+			column.outputItem(item, (selection.length > 0) ? selection : null);
 		}
-	});
+	);
 
 	//Toggle all menus for the currently selected actor
-	$('#ws_toggle_all_menus').click(function(event) {
-		event.preventDefault();
+	menuEditorNode.on(
+		'adminMenuEditor:action-toggle-all',
+		function() {
+			if ( actorSelectorWidget.selectedActor === null ) {
+				alert("This button enables/disables all menus for the selected role. To use it, click a role and then click this button again.");
+				return;
+			}
 
-		if ( actorSelectorWidget.selectedActor === null ) {
-			alert("This button enables/disables all menus for the selected role. To use it, click a role and then click this button again.");
-			return;
+			//Look at the first menu's permissions and set everything to the opposite.
+			const firstColumn = menuPresenter.getColumnImmediate(1);
+			const topMenuNodes = $('.ws_menu', firstColumn.getVisibleItemList());
+
+			const allow = ! actorCanAccessMenu(topMenuNodes.eq(0).data('menu_item'), actorSelectorWidget.selectedActor);
+
+			topMenuNodes.each(function() {
+				let containerNode = $(this);
+				setActorAccessForTreeAndUpdateUi(containerNode, actorSelectorWidget.selectedActor, allow);
+			});
 		}
-
-		var topMenuNodes = $('.ws_menu', '#ws_menu_box');
-		//Look at the first menu's permissions and set everything to the opposite.
-		var allow = ! actorCanAccessMenu(topMenuNodes.eq(0).data('menu_item'), actorSelectorWidget.selectedActor);
-
-		topMenuNodes.each(function() {
-			var containerNode = $(this);
-			setActorAccessForTreeAndUpdateUi(containerNode, actorSelectorWidget.selectedActor, allow);
-		});
-	});
+	);
 
 	//Copy all menu permissions from one role to another.
 	var copyPermissionsDialog = $('#ws-ame-copy-permissions-dialog').dialog({
@@ -3901,42 +4631,43 @@ function ameOnDomReady() {
 	var sourceActorList = $('#ame-copy-source-actor'), destinationActorList = $('#ame-copy-destination-actor');
 
 	//The "Copy permissions" toolbar button.
-	$('#ws_copy_role_permissions').click(function(event) {
-		event.preventDefault();
+	menuEditorNode.on(
+		'adminMenuEditor:action-copy-permissions',
+		function() {
+			const previousSource = sourceActorList.val();
 
-		var previousSource = sourceActorList.val();
-
-		//Populate source/destination lists.
-		sourceActorList.find('option').not('[disabled]').remove();
-		destinationActorList.find('option').not('[disabled]').remove();
-		$.each(actorSelectorWidget.getVisibleActors(), function(index, actor) {
-			var option = $('<option>', {
-				val: actor.id,
-				text: actorSelectorWidget.getNiceName(actor)
+			//Populate source/destination lists.
+			sourceActorList.find('option').not('[disabled]').remove();
+			destinationActorList.find('option').not('[disabled]').remove();
+			$.each(actorSelectorWidget.getVisibleActors(), function(index, actor) {
+				let option = $('<option>', {
+					val: actor.id,
+					text: actorSelectorWidget.getNiceName(actor)
+				});
+				sourceActorList.append(option);
+				destinationActorList.append(option.clone());
 			});
-			sourceActorList.append(option);
-			destinationActorList.append(option.clone());
-		});
 
-		//Pre-select the current actor as the destination.
-		if (actorSelectorWidget.selectedActor !== null) {
-			destinationActorList.val(actorSelectorWidget.selectedActor);
-		}
+			//Pre-select the current actor as the destination.
+			if (actorSelectorWidget.selectedActor !== null) {
+				destinationActorList.val(actorSelectorWidget.selectedActor);
+			}
 
-		//Restore the previous source selection.
-		if (previousSource) {
-			sourceActorList.val(previousSource);
-		}
-		if (!sourceActorList.val()) {
-			sourceActorList.find('option').first().prop('selected', true); //Fallback.
-		}
+			//Restore the previous source selection.
+			if (previousSource) {
+				sourceActorList.val(previousSource);
+			}
+			if (!sourceActorList.val()) {
+				sourceActorList.find('option').first().prop('selected', true); //Fallback.
+			}
 
-		copyPermissionsDialog.dialog('open');
-	});
+			copyPermissionsDialog.dialog('open');
+		}
+	);
 
 	//Actually copy the permissions when the user click the confirmation button.
 	var copyConfirmationButton = $('#ws-ame-confirm-copy-permissions');
-	copyConfirmationButton.click(function() {
+	copyConfirmationButton.on('click', function() {
 		var sourceActor = sourceActorList.val();
 		var destinationActor = destinationActorList.val();
 
@@ -3946,15 +4677,11 @@ function ameOnDomReady() {
 		}
 
 		//Iterate over all menu items and copy the permissions from one actor to the other.
-		var allMenuNodes = $('.ws_menu', '#ws_menu_box').add('.ws_item', submenuBox);
-		allMenuNodes.each(function() {
-			var node = $(this);
-			var menuItem = node.data('menu_item');
-
+		AmeEditorApi.forEachMenuItem(function (menuItem, node) {
 			//Only change permissions when they don't match. This ensures we won't unnecessarily overwrite default
 			//permissions and bloat the configuration with extra grant_access entries.
-			var sourceAccess      = actorCanAccessMenu(menuItem, sourceActor);
-			var destinationAccess = actorCanAccessMenu(menuItem, destinationActor);
+			const sourceAccess      = actorCanAccessMenu(menuItem, sourceActor);
+			const destinationAccess = actorCanAccessMenu(menuItem, destinationActor);
 			if (sourceAccess !== destinationAccess) {
 				setActorAccess(node, destinationActor, sourceAccess);
 				//Note: In theory, we could also look at the default permissions for destinationActor and
@@ -3978,7 +4705,7 @@ function ameOnDomReady() {
 
 	//Only enable the copy button when the user selects a valid source and destination.
 	copyConfirmationButton.prop('disabled', true);
-	sourceActorList.add(destinationActorList).click(function() {
+	sourceActorList.add(destinationActorList).on('change', function() {
 		var sourceActor = sourceActorList.val();
 		var destinationActor = destinationActorList.val();
 
@@ -3987,30 +4714,44 @@ function ameOnDomReady() {
 	});
 
 	//Sort menus in ascending or descending order.
-	menuEditorNode.find('.ws_toolbar').on('click', '.ws_sort_menus_button', function(event) {
-		event.preventDefault();
+	menuEditorNode.on(
+		'adminMenuEditor:action-sort',
+		/**
+		 * @param event
+		 * @param {JQuery|null} selectedItem
+		 * @param {AmeEditorColumn} column
+		 * @param {JQuery} button
+		 */
+		function(event, selectedItem, column, button) {
+			let direction = button.data('sort-direction') || 'asc',
+				menuBox = column.getVisibleItemList();
 
-		var button = $(this),
-			direction = button.data('sort-direction') || 'asc',
-			menuBox = $(this).closest('.ws_main_container').find('.ws_box').first();
+			if (!menuBox || (menuBox.length < 1)) {
+				return;
+			}
 
-		if (menuBox.is('#ws_submenu_box')) {
-			menuBox = menuBox.find('.ws_submenu:visible').first();
+			function sortRecursively($box, currentColumn) {
+				//When indirectly sorting the second menu level (regular submenus), leave the first item unmoved.
+				//Moving the first item would change the parent menu URL (WP always links it to the first item),
+				//which can be unexpected and confusing. The user can always move the first item manually.
+				let leaveFirstItem = ((currentColumn !== column) && (currentColumn.level === 2));
+				sortMenuItems($box, direction, leaveFirstItem);
+
+				//Also sort child items in the next columns.
+				const nextColumn = menuPresenter.getColumnImmediate(currentColumn.level + 1);
+				if (nextColumn) {
+					$box.find('.ws_container').each(function () {
+						const $submenu = getSubmenuOf($(this), null);
+						if ($submenu) {
+							sortRecursively($submenu, nextColumn);
+						}
+					});
+				}
+			}
+
+			sortRecursively(menuBox, column);
 		}
-
-		if (menuBox.length > 0) {
-			sortMenuItems(menuBox, direction);
-		}
-
-		//When sorting the top level menu also sort submenus, but leave the first item unmoved.
-		//Moving the first item would change the parent menu URL (WP always links it to the first item),
-		//which can be unexpected and confusing. The user can always move the first item manually.
-		if (menuBox.is('#ws_menu_box')) {
-			$('#ws_submenu_box').find('.ws_submenu').each(function() {
-				sortMenuItems($(this), direction, true);
-			});
-		}
-	});
+	);
 
 	/**
 	 * Sort menu items by title.
@@ -4062,178 +4803,32 @@ function ameOnDomReady() {
 	}
 
 	//Toggle the second row of toolbar buttons.
-	$('#ws_toggle_toolbar').click(function() {
-		var visible = menuEditorNode.find('.ws_second_toolbar_row').toggle().is(':visible');
-		$.cookie('ame-show-second-toolbar', visible ? '1' : '0', {expires: 90});
-	});
+	menuEditorNode.on(
+		'adminMenuEditor:action-toggle-toolbar',
+		function() {
+			let visible = menuEditorNode.find('.ws_second_toolbar_row').toggle().is(':visible');
+			if (typeof $['cookie'] !== 'undefined') {
+				$.cookie('ame-show-second-toolbar', visible ? '1' : '0', {expires: 90});
+			}
+		}
+	);
 
 
 	/*************************************************************************
 	                          Item toolbar buttons
 	 *************************************************************************/
 	function getSelectedSubmenuItem() {
-		return $('#ws_submenu_box').find('.ws_submenu:visible .ws_active');
+		return menuPresenter.getColumnImmediate(2).getSelectedItem();
 	}
 
-	//Show/Hide item
-	$('#ws_hide_item').click(function (event) {
-		event.preventDefault();
-
-		//Get the selected item
-		var selection = getSelectedSubmenuItem();
-		if (!selection.length) {
-			return;
-		}
-
-		//Mark the item as hidden/visible
-		toggleItemHiddenFlag(selection);
-	});
-
-	//Delete item
-	$('#ws_delete_item').click(function (event) {
-		event.preventDefault();
-
-		var selection = getSelectedSubmenuItem();
-		if (!selection.length) {
-			return;
-		}
-
-		tryDeleteItem(selection);
-	});
-
-	//Copy item
-	$('#ws_copy_item').click(function (event) {
-		event.preventDefault();
-
-		//Get the selected item
-		var selection = getSelectedSubmenuItem();
-		if (!selection.length) {
-			return;
-		}
-
-		//Store a copy of item state in the clipboard
-		menu_in_clipboard = readItemState(selection);
-	});
-
-	//Cut item
-	$('#ws_cut_item').click(function (event) {
-		event.preventDefault();
-
-		//Get the selected item
-		var selection = getSelectedSubmenuItem();
-		if (!selection.length) {
-			return;
-		}
-
-		//Store a copy of item state in the clipboard
-		menu_in_clipboard = readItemState(selection);
-
-		var submenu = selection.parent();
-		//Remove the original item
-		selection.remove();
-		updateParentAccessUi(submenu);
-	});
-
-	//Paste item
-	function pasteItem(item, targetSubmenu) {
-		//We're pasting this item into a sub-menu, so it can't have a sub-menu of its own.
-		//Instead, any sub-menu items belonging to this item will be pasted after the item.
-		var newItems = [];
-		for (var file in item.items) {
-			if (item.items.hasOwnProperty(file)) {
-				newItems.push(buildMenuItem(item.items[file], false));
-			}
-		}
-		item.items = [];
-
-		newItems.unshift(buildMenuItem(item, false));
-
-		//Paste into the currently visible submenu by default.
-		targetSubmenu = targetSubmenu || $('#ws_submenu_box').find('.ws_submenu:visible');
-		//Get the selected menu
-		var selection = targetSubmenu.find('.ws_active');
-		for(var i = 0; i < newItems.length; i++) {
-			if (selection.length > 0) {
-				//If an item is selected add the pasted items after it
-				selection.after(newItems[i]);
-			} else {
-				//Otherwise add the pasted items at the end
-				targetSubmenu.append(newItems[i]);
-			}
-
-			updateItemEditor(newItems[i]);
-			newItems[i].show();
-		}
-
-		updateParentAccessUi(targetSubmenu);
-	}
-
-	$('#ws_paste_item').click(function (event) {
-		event.preventDefault();
-
-		//Check if anything has been copied/cut
-		if (!menu_in_clipboard) {
-			return;
-		}
-
-		//You can only add separators to submenus in the Pro version.
-		if ( menu_in_clipboard.separator && !wsEditorData.wsMenuEditorPro ) {
-			return;
-		}
-
-		//Paste it.
-		var item = $.extend(true, {}, menu_in_clipboard);
-		pasteItem(item);
-	});
-
-	//New item
-	$('#ws_new_item').click(function (event) {
-		event.preventDefault();
-
-		if ($('.ws_submenu:visible').length < 1) {
-			return; //Abort if no submenu visible
-		}
-
-		ws_paste_count++;
-
-		var entry = $.extend(true, {}, wsEditorData.blankMenuItem, {
-			custom: true,
-			template_id : '',
-			menu_title : 'Custom Item ' + ws_paste_count,
-			file : randomMenuId(),
-			items: []
-		});
-		entry.defaults = $.extend(true, {}, itemTemplates.getDefaults(''));
-
-		//Make it accessible to only the currently selected actor.
-		if (actorSelectorWidget.selectedActor !== null) {
-			denyAccessForAllExcept(entry, actorSelectorWidget.selectedActor);
-		}
-
-		var menu = buildMenuItem(entry);
-
-		//Insert the item into the currently open submenu.
-		var visibleSubmenu = $('#ws_submenu_box').find('.ws_submenu:visible');
-		var selection = visibleSubmenu.find('.ws_active');
-		if (selection.length > 0) {
-			selection.after(menu);
-		} else {
-			visibleSubmenu.append(menu);
-		}
-		updateItemEditor(menu);
-
-		//The items's editbox is always open
-		menu.find('.ws_edit_link').click();
-
-		updateParentAccessUi(menu);
-	});
+	//endregion
 
 	//==============================================
 	//				Main buttons
 	//==============================================
 
 	//Save Changes - encode the current menu as JSON and save
-	$('#ws_save_menu').click(function () {
+	$('#ws_save_menu').on('click', function () {
 		try {
 			var tree = readMenuTreeState();
 		} catch (error) {
@@ -4292,6 +4887,8 @@ function ameOnDomReady() {
 		$('#ws_data_length').val(data.length);
 		$('#ws_selected_actor').val(actorSelectorWidget.selectedActor === null ? '' : actorSelectorWidget.selectedActor);
 
+		$('#ws_is_deep_nesting_enabled').val(JSON.stringify(menuPresenter.isDeepNestingEnabled));
+
 		var selectedMenu = getSelectedMenu();
 		if (selectedMenu.length > 0) {
 			$('#ws_selected_menu_url').val(AmeEditorApi.getItemDisplayUrl(selectedMenu.data('menu_item')));
@@ -4304,26 +4901,35 @@ function ameOnDomReady() {
 			}
 		}
 
-		$('#ws_main_form').submit();
+		$('#ws_main_form').trigger('submit');
 	});
 
 	//Load default menu - load the default WordPress menu
-	$('#ws_load_menu').click(function () {
+	$('#ws_load_menu').on('click', function () {
 		if (confirm('Are you sure you want to load the default WordPress menu?')){
 			loadMenuConfiguration(defaultMenu);
 		}
 	});
 
 	//Reset menu - re-load the custom menu. Discards any changes made by user.
-	$('#ws_reset_menu').click(function () {
+	$('#ws_reset_menu').on('click', function () {
 		if (confirm('Undo all changes made in the current editing session?')){
 			loadMenuConfiguration(customMenu);
 		}
 	});
 
-	$('#ws_toggle_editor_layout').click(function () {
+	//Enable the "load default menu" and "undo changes" buttons only when "All" is selected.
+	//Otherwise some users incorrectly assume these buttons only affect the currently selected role or user.
+	actorSelectorWidget.onChange(function (newSelectedActor) {
+		$('#ws_load_menu, #ws_reset_menu').prop('disabled', newSelectedActor !== null);
+	});
+	$('#ws_load_menu, #ws_reset_menu').prop('disabled', actorSelectorWidget.selectedActor !== null);
+
+	$('#ws_toggle_editor_layout').on('click', function () {
 		var isCompactLayoutEnabled = menuEditorNode.toggleClass('ws_compact_layout').hasClass('ws_compact_layout');
-		$.cookie('ame-compact-layout', isCompactLayoutEnabled ? '1' : '0', {expires: 90});
+		if (typeof $['cookie'] !== 'undefined') {
+			$.cookie('ame-compact-layout', isCompactLayoutEnabled ? '1' : '0', {expires: 90});
+		}
 
 		var button = $(this);
 		if (button.is('input')) {
@@ -4343,7 +4949,7 @@ function ameOnDomReady() {
 		minHeight: 100
 	});
 
-	$('#ws_export_menu').click(function(){
+	$('#ws_export_menu').on('click', function(){
 		var button = $(this);
 		button.prop('disabled', true);
 		button.val('Exporting...');
@@ -4396,11 +5002,11 @@ function ameOnDomReady() {
 		);
 	});
 
-	$('#ws_cancel_export').click(function(){
+	$('#ws_cancel_export').on('click', function(){
 		$('#export_dialog').dialog('close');
 	});
 
-	$('#download_menu_button').click(function(){
+	$('#download_menu_button').on('click', function(){
 		$('#export_dialog').dialog('close');
 	});
 
@@ -4410,15 +5016,16 @@ function ameOnDomReady() {
 		closeText: ' ',
 		modal: true
 	});
+	const $importMenuForm = $('#import_menu_form');
 
-	$('#ws_cancel_import').click(function(){
+	$('#ws_cancel_import').on('click', function(){
 		$('#import_dialog').dialog('close');
 	});
 
-	$('#ws_import_menu').click(function(){
+	$('#ws_import_menu').on('click', function(){
 		$('#import_progress_notice, #import_progress_notice2, #import_complete_notice, #ws_import_error').hide();
 		$('#ws_import_panel').show();
-		$('#import_menu_form').resetForm();
+		$importMenuForm.resetForm();
 		//The "Upload" button is disabled until the user selects a file
 		$('#ws_start_import').attr('disabled', 'disabled');
 
@@ -4427,7 +5034,7 @@ function ameOnDomReady() {
 		importDialog.dialog('open');
 	});
 
-	$('#import_file_selector').change(function(){
+	$('#import_file_selector').on('change', function(){
 		$('#ws_start_import').prop('disabled', ! $(this).val() );
 	});
 
@@ -4436,7 +5043,7 @@ function ameOnDomReady() {
 	function handleUnexpectedImportError(xhr, errorMessage) {
 		//The server-side code didn't catch this error, so it's probably something serious
 		//and retrying won't work.
-		$('#import_menu_form').resetForm();
+		$importMenuForm.resetForm();
 		$('#ws_import_panel').hide();
 
 		//Display error information.
@@ -4447,7 +5054,7 @@ function ameOnDomReady() {
 	}
 
 	//AJAXify the upload form
-	$('#import_menu_form').ajaxForm({
+	$importMenuForm.ajaxForm({
 		dataType : 'json',
 		beforeSubmit: function(formData) {
 
@@ -4485,7 +5092,7 @@ function ameOnDomReady() {
 			if ( typeof data.error !== 'undefined' ){
 				alert(data.error);
 				//Let the user try again
-				$('#import_menu_form').resetForm();
+				$importMenuForm.resetForm();
 				importDialog.find('.hide-when-uploading').show();
 			}
 
@@ -4513,76 +5120,55 @@ function ameOnDomReady() {
 	                 Drag & drop items between menu levels
 	 *************************************************************************/
 
-	if (wsEditorData.wsMenuEditorPro) {
-		//Allow the user to drag sub-menu items to the top level.
-		$('#ws_top_menu_dropzone').droppable({
-			'hoverClass' : 'ws_dropzone_hover',
-			'activeClass' : 'ws_dropzone_active',
+	//Allow the user to drag sub-menu items to the top level.
+	$('#ws_top_menu_dropzone').droppable({
+		'hoverClass' : 'ws_dropzone_hover',
+		'activeClass' : 'ws_dropzone_active',
 
-			'accept' : (function(thing){
-				return thing.hasClass('ws_item');
-			}),
+		'accept' : (function(thing){
+			return thing.hasClass('ws_item');
+		}),
 
-			'drop' : (function(event, ui){
-				var droppedItemData = readItemState(ui.draggable);
-				var newItemNodes = pasteMenu(droppedItemData);
+		'drop' : (function(event, ui){
+			const firstColumn = menuPresenter.getColumnImmediate(1);
+			if (!firstColumn) {
+				return;
+			}
+			const nextColumn = menuPresenter.getColumnImmediate(firstColumn.level + 1);
 
-				//If the item was originally a top level menu, also move its original submenu items.
-				if (getFieldValue(droppedItemData, 'parent') === null) {
-					var droppedItemFile = getFieldValue(droppedItemData, 'file');
-					var nearbyItems = $(ui.draggable).siblings('.ws_item');
-					nearbyItems.each(function() {
-						var containerNode = $(this),
-							submenuItem = containerNode.data('menu_item');
+			const droppedItemData = readItemState(ui.draggable);
+			const newItemNodes = firstColumn.pasteItem(droppedItemData, null);
 
-						//Was this item originally a child of the dragged menu?
-						if (getFieldValue(submenuItem, 'parent') === droppedItemFile) {
-							pasteItem(submenuItem, newItemNodes.submenu);
-							if ( !event.ctrlKey ) {
-								containerNode.remove();
-							}
+			//If the item was originally a top level menu, also move its original submenu items.
+			if ((getFieldValue(droppedItemData, 'parent') === null) && (newItemNodes.submenu)) {
+				const droppedItemFile = getFieldValue(droppedItemData, 'file');
+				const nearbyItems = $(ui.draggable).siblings('.ws_item');
+				nearbyItems.each(function() {
+					const containerNode = $(this),
+						submenuItem = containerNode.data('menu_item');
+
+					//Was this item originally a child of the dragged menu?
+					if (getFieldValue(submenuItem, 'parent') === droppedItemFile) {
+						nextColumn.pasteItem(submenuItem, null, newItemNodes.submenu);
+						if ( !event.ctrlKey ) {
+							menuPresenter.destroyItem(containerNode);
 						}
-					});
-				}
+					}
+				});
+			}
 
-				if ( !event.ctrlKey ) {
-					ui.draggable.remove();
-				}
-			})
-		});
-
-		//...and to drag top level menus to a sub-menu.
-		submenuBox.closest('.ws_main_container').droppable({
-			'hoverClass' : 'ws_top_to_submenu_drop_hover',
-
-			'accept' : (function(thing){
-				var visibleSubmenu = $('#ws_submenu_box').find('.ws_submenu:visible');
-				return (
-					//Accept top-level menus
-					thing.hasClass('ws_menu') &&
-
-					//Prevent users from dropping a menu on its own sub-menu.
-					(visibleSubmenu.attr('id') !== thing.data('submenu_id'))
-				);
-			}),
-
-			'drop' : (function(event, ui){
-				var droppedItemData = readItemState(ui.draggable);
-				pasteItem(droppedItemData);
-				if ( !event.ctrlKey ) {
-					ui.draggable.remove();
-				}
-			})
-		});
-	}
+			if ( !event.ctrlKey ) {
+				menuPresenter.destroyItem(ui.draggable);
+			}
+		})
+	});
 
 	/******************************************************************
-	                 Component visibility settings
+                 Component visibility settings
 	 ******************************************************************/
-
-	var $generalVisBox = $('#ws_ame_general_vis_box'),
-		$showAdminMenu = $('#ws_ame_show_admin_menu'),
-		$showWpToolbar = $('#ws_ame_show_toolbar');
+	const $generalVisBox = $('#ws_ame_general_vis_box');
+	const componentCheckboxes = {},
+		parsedComponentsDataKey = 'ameParsedComponents';
 
 	AmeEditorApi.actorCanSeeComponent = function(component, actorId) {
 		if (actorId === null) {
@@ -4630,49 +5216,84 @@ function ameOnDomReady() {
 		return true;
 	};
 
-	AmeEditorApi.refreshComponentVisibility = function() {
+	function refreshComponentCheckbox($checkbox) {
+		const components = $checkbox.data(parsedComponentsDataKey) || [];
+		if (components.length < 1) {
+			return;
+		}
+
+		const actorId = actorSelectorWidget.selectedActor;
+		let totalVisible = 0;
+		for (let i = 0; i < components.length; i++) {
+			if (AmeEditorApi.actorCanSeeComponent(components[i], actorId)) {
+				totalVisible++;
+			}
+		}
+
+		$checkbox.prop('checked', totalVisible === components.length);
+		$checkbox.prop('indeterminate', (totalVisible > 0) && (totalVisible < components.length));
+	}
+
+	AmeEditorApi.refreshComponentVisibility = function(updatedComponents = null) {
 		if ($generalVisBox.length < 1) {
 			return;
 		}
 
-		var actorId = actorSelectorWidget.selectedActor;
-		$showAdminMenu.prop('checked', AmeEditorApi.actorCanSeeComponent('adminMenu', actorId));
-		$showWpToolbar.prop('checked', AmeEditorApi.actorCanSeeComponent('toolbar', actorId));
+		if (updatedComponents === null) {
+			updatedComponents = Object.keys(componentCheckboxes);
+		}
+
+		_.forEach(updatedComponents, function (componentId) {
+			const checkboxes = componentCheckboxes[componentId] || [];
+			_.forEach(checkboxes, $checkbox => refreshComponentCheckbox($checkbox));
+		});
 	};
 
 	AmeEditorApi.setComponentVisibility = function(section, actorId, enabled) {
 		if (actorId === null) {
 			_.forEach(actorSelectorWidget.getVisibleActors(), function(actor) {
-				_.set(generalComponentVisibility, [section, actor.id], enabled);
+				_.set(generalComponentVisibility, [section, actor.getId()], enabled);
 			});
 		} else {
 			_.set(generalComponentVisibility, [section, actorId], enabled);
 		}
+
+		AmeEditorApi.refreshComponentVisibility([section]);
 	};
 
 	if ($generalVisBox.length > 0) {
-		$showAdminMenu.click(function() {
-			AmeEditorApi.setComponentVisibility(
-				'adminMenu',
-				actorSelectorWidget.selectedActor,
-				$(this).is(':checked')
-			);
-		});
-		$showWpToolbar.click(function () {
-			AmeEditorApi.setComponentVisibility(
-				'toolbar',
-				actorSelectorWidget.selectedActor,
-				$(this).is(':checked')
-			);
+		$generalVisBox.find('input[type="checkbox"][data-vis-components]').each(function() {
+			const $checkbox = $(this);
+			const components = $checkbox.data('vis-components');
+			if (!Array.isArray(components)) {
+				return;
+			}
+
+			$checkbox.data(parsedComponentsDataKey, components);
+			components.forEach(function(componentId) {
+				if (!componentCheckboxes.hasOwnProperty(componentId)) {
+					componentCheckboxes[componentId] = [];
+				}
+				componentCheckboxes[componentId].push($checkbox);
+			});
+
+			$checkbox.on('change', function() {
+				const isChecked = $(this).is(':checked');
+				components.forEach(function(componentId) {
+					AmeEditorApi.setComponentVisibility(componentId, actorSelectorWidget.selectedActor, isChecked);
+				});
+			});
 		});
 
-		$generalVisBox.find('.handlediv').click(function() {
+		$generalVisBox.find('.handlediv').on('click', function() {
 			$generalVisBox.toggleClass('closed');
-			$.cookie(
-				'ame_vis_box_open',
-				($generalVisBox.hasClass('closed') ? '0' : '1'),
-				{ expires: 90 }
-			);
+			if (typeof $['cookie'] !== 'undefined') {
+				$.cookie(
+					'ame_vis_box_open',
+					($generalVisBox.hasClass('closed') ? '0' : '1'),
+					{ expires: 90 }
+				);
+			}
 		});
 
 		actorSelectorWidget.onChange(function() {
@@ -4680,11 +5301,207 @@ function ameOnDomReady() {
 		});
 	}
 
+	//region Aux menu data adapter
+	/******************************************************************
+	                     Auxiliary menu data adapter
+	 ******************************************************************/
+
+	/**
+	 * Provides read/write access to additional arbitrary data that can be stored
+	 * in the admin menu configuration (i.e. everything that's not the menu tree).
+	 *
+	 * @constructor
+	 */
+	class AuxiliaryConfigDataAdapter {
+		currentConfig = {};
+		registeredKeys = {};
+		settingIdMap = {};
+		prefixMap = {};
+
+		constructor(adapterConfig = {}) {
+			adapterConfig = adapterConfig || {};
+			const initialPrefixes = _.get(adapterConfig, 'prefixMap', {});
+			//Convert dot-separated paths like "a.b.c" to arrays.
+			this.prefixMap = _.mapValues(initialPrefixes, (value) => {
+				return _.isString(value) ? value.split('.') : value;
+			});
+
+			const initialKeys = _.get(adapterConfig, 'keys', {});
+			for (const key in initialKeys) {
+				this.registerKey(key, initialKeys[key]);
+			}
+			const initialSettingIdMap = _.get(adapterConfig, 'settingIdMap', {});
+			for (const key in initialSettingIdMap) {
+				this.registerSettingId(key, initialSettingIdMap[key]);
+			}
+
+			$(document)
+				.on('menuConfigurationLoaded.adminMenuEditor', (event, menuConfiguration) => {
+					//To avoid accidentally modifying the original config, make
+					//a copy of each key except "tree" and "format".
+					let configCopy = {};
+					for (const key in menuConfiguration) {
+						if (!menuConfiguration.hasOwnProperty(key) || (key === 'tree') || (key === 'format')) {
+							continue;
+						}
+
+						if ((typeof menuConfiguration[key] === 'object') && (menuConfiguration[key] !== null)) {
+							configCopy[key] = $.extend(true, {}, menuConfiguration[key]);
+						} else {
+							configCopy[key] = menuConfiguration[key];
+						}
+
+					}
+					this.currentConfig = configCopy;
+				})
+				.on('getMenuConfiguration.adminMenuEditor', (event, menuConfiguration) => {
+					//Copy registered settings to the menu configuration.
+					for (let key in this.registeredKeys) {
+						if (
+							!this.registeredKeys.hasOwnProperty(key)
+							|| (key === 'tree')
+							|| (key === 'format')
+						) {
+							continue;
+						}
+
+						//Don't overwrite keys added by other scripts/event callbacks.
+						if (typeof menuConfiguration[key] !== 'undefined') {
+							continue;
+						}
+
+						if ((typeof this.currentConfig[key] !== 'undefined') && (this.currentConfig[key] !== null)) {
+							const newValue = this.currentConfig[key];
+							if (typeof newValue === 'object') {
+								menuConfiguration[key] = $.extend(true, {}, newValue);
+							} else {
+								menuConfiguration[key] = newValue;
+							}
+						} else {
+							delete menuConfiguration[key];
+						}
+					}
+				});
+		}
+
+		/**
+		 * Register a key on the menu configuration object. It will be preserved
+		 * when the menu configuration is saved.
+		 *
+		 * @param {string} key
+		 * @param {string|null} settingIdPrefix
+		 */
+		registerKey(key, settingIdPrefix = null) {
+			this.registeredKeys[key] = true;
+			this.prefixMap[settingIdPrefix] = [key];
+		}
+
+		/**
+		 * Register a setting ID that corresponds to a specific path in the menu configuration object.
+		 * You will be able to use the setting ID to read and write the corresponding value.
+		 *
+		 * @param {string} settingId
+		 * @param {string|string[]} path
+		 */
+		registerSettingId(settingId, path) {
+			this.settingIdMap[settingId] = path;
+		}
+
+		/**
+		 * Get a list of all setting prefixes that this adapter may be able to handle.
+		 *
+		 * @returns {string[]}
+		 */
+		getKnownPrefixes() {
+			return Object.keys(this.prefixMap);
+		}
+
+		getSettingValue(settingId, defaultValue = null) {
+			const path = this.mapSettingIdToPath(settingId);
+			if (path === null) {
+				return defaultValue;
+			}
+			return _.get(this.currentConfig, path, defaultValue);
+		}
+
+		/**
+		 * @param {string} settingId
+		 * @returns {null|string|string[]}
+		 */
+		mapSettingIdToPath(settingId) {
+			const knownPath = this.settingIdMap[settingId];
+			if (typeof knownPath !== 'undefined') {
+				return knownPath;
+			}
+
+			//Does this ID start with a known prefix?
+			for (const prefix in this.prefixMap) {
+				if (!this.prefixMap.hasOwnProperty(prefix)) {
+					continue;
+				}
+
+				if (settingId.indexOf(prefix) === 0) {
+					const suffix = settingId.substring(prefix.length);
+					//Strip leading dots and convert to an array.
+					const suffixPath = suffix.replace(/^\.+/, '').split('.');
+					//Combine the prefix path with the suffix path.
+					return this.prefixMap[prefix].concat(suffixPath);
+				}
+			}
+
+			return null;
+		}
+
+		/**
+		 * Set multiple settings at once.
+		 *
+		 * @param {object} settingsById Object where keys are setting IDs and values are the new setting values.
+		 */
+		updateSettingsById(settingsById) {
+			for (const settingId in settingsById) {
+				if (settingsById.hasOwnProperty(settingId)) {
+					const path = this.mapSettingIdToPath(settingId);
+					if (path !== null) {
+						_.set(this.currentConfig, path, settingsById[settingId]);
+					}
+				}
+			}
+		}
+
+		/**
+		 * Get a value from the menu configuration object. Uses a simple path, not a setting ID.
+		 *
+		 * @param {string|string[]} path
+		 * @param {*} defaultValue
+		 * @returns {*}
+		 */
+		getPath(path, defaultValue = null) {
+			return _.get(this.currentConfig, path, defaultValue);
+		}
+
+		/**
+		 * Directly set a value in the menu configuration object. Does not translate setting IDs.
+		 *
+		 * @param {string|string[]} path Plain path, not a setting ID.
+		 * @param {*} value
+		 */
+		setPath(path, value) {
+			_.set(this.currentConfig, path, value);
+		}
+	}
+
+	AmeEditorApi.configDataAdapter = new AuxiliaryConfigDataAdapter(wsEditorData.auxDataConfig);
+	//endregion
+
 	/******************************************************************
 	                      Tooltips and hints
 	 ******************************************************************/
 
 
+	//Increase tooltip z-index to avoid a conflict with the Essential Grid plugin.
+	//That plugin sets the jQuery UI dialog z-index to 100102, making tooltips appear
+	//underneath the dialog.
+	$.fn.qtip.zindex = 100200;
 	//Set up tooltips
 	$('.ws_tooltip_trigger').qtip({
 		style: {
@@ -4696,7 +5513,7 @@ function ameOnDomReady() {
 		}
 	});
 
-	//Set up menu field toltips.
+	//Set up menu field tooltips.
 	menuEditorNode.on('mouseenter click', '.ws_edit_field .ws_field_tooltip_trigger', function(event) {
 		var $trigger = $(this),
 			fieldName = $trigger.closest('.ws_edit_field').data('field_name');
@@ -4749,17 +5566,19 @@ function ameOnDomReady() {
 					var indicator = $(this),
 						extPermissions = indicator.data('ext_permissions'),
 						text = 'Additional permission settings are available. Click "Edit..." to change them.',
-						heading = '';
+						heading = '',
+						$content = $('<span></span>');
 
 					if (extPermissions && extPermissions.hasOwnProperty('title')) {
 						heading = extPermissions.title;
 						if (extPermissions.hasOwnProperty('type')) {
 							heading = _.capitalize(_.startCase(extPermissions.type).toLowerCase()) + ': ' + heading;
 						}
-						text = '<strong>' + heading + '</strong><br>' + text;
+						$content.append($('<strong></strong>').text(heading)).append('<br>');
 					}
 
-					return text;
+					$content.append($(document.createTextNode(text)));
+					return $content;
 				}
 			},
 			show: {
@@ -4780,28 +5599,31 @@ function ameOnDomReady() {
 	});
 
 	//Flag closed hints as hidden by sending the appropriate AJAX request to the backend.
-	$('.ws_hint_close').click(function() {
+	$('.ws_hint_close').on('click', function() {
 		var hint = $(this).parents('.ws_hint').first();
 		hint.hide();
 		wsEditorData.showHints[hint.attr('id')] = false;
 		$.post(
 			wsEditorData.adminAjaxUrl,
 			{
-				'action' : 'ws_ame_hide_hint',
-				'hint' : hint.attr('id')
+				'action': 'ws_ame_hide_hint',
+				'_ajax_nonce': wsEditorData.hideHintNonce,
+				'hint': hint.attr('id')
 			}
 		);
 	});
 
 	//Expand/collapse the "How To" box.
 	var $howToBox = $("#ws_ame_how_to_box");
-	$howToBox.find(".handlediv").click(function() {
+	$howToBox.find(".handlediv").on('click', function() {
 		$howToBox.toggleClass('closed');
-		$.cookie(
-			'ame_how_to_box_open',
-			($howToBox.hasClass('closed') ? '0' : '1'),
-			{ expires: 180 }
-		);
+		if (typeof $['cookie'] !== 'undefined') {
+			$.cookie(
+				'ame_how_to_box_open',
+				($howToBox.hasClass('closed') ? '0' : '1'),
+				{ expires: 180 }
+			);
+		}
 	});
 
 
@@ -4848,7 +5670,7 @@ function ameOnDomReady() {
 		testProgress = $('#ws_ame_test_progress'),
 		testProgressText = $('#ws_ame_test_progress_text');
 
-	$('#ws_test_access').click(function () {
+	$('#ws_test_access').on('click', function () {
 		testConfig = readMenuTreeState();
 
 		var selectedMenuContainer = getSelectedMenu(),
@@ -4919,14 +5741,13 @@ function ameOnDomReady() {
 		testAccessDialog.dialog('open');
 	});
 
-	testAccessButton.click(function () {
+	testAccessButton.on('click', function () {
 		testAccessButton.prop('disabled', true);
 		testProgress.show();
 		testProgressText.text('Sending menu settings...');
 
 		var selectedOption = testMenuItemList.find('option:selected').first(),
-			selectedMenu = selectedOption.data('menu_item'),
-			menuUrl = selectedOption.val();
+			selectedMenu = selectedOption.data('menu_item');
 
 		$.ajax(
 			wsEditorData.adminAjaxUrl,
@@ -4938,7 +5759,7 @@ function ameOnDomReady() {
 				},
 				method: 'post',
 				dataType: 'json',
-				success: function(response, textStatus) {
+				success: function(response) {
 					if (!response) {
 						alert('Error: Could not parse the server response.');
 						testAccessButton.prop('disabled', false);
@@ -4955,8 +5776,10 @@ function ameOnDomReady() {
 						return;
 					}
 
+					throw new Error('Not fully implemented yet!');
 					//Caution: Won't work in IE. Needs compat checks.
-					var testPageUrl = new URL(menuUrl, window.location.href);
+					//var testPageUrl = new URL(menuUrl, window.location.href);
+					var testPageUrl = 'fixme';
 					testPageUrl.searchParams.append('ame-test-menu-access-as', $('#ws_ame_test_access_username').val());
 					testPageUrl.searchParams.append('_wpnonce', wsEditorData.testAccessNonce);
 					testPageUrl.searchParams.append('ame-test-relevant-role', testActorList.val());
@@ -5024,6 +5847,52 @@ function ameOnDomReady() {
 
 	//... and make the UI visible now that it's fully rendered.
 	menuEditorNode.css('visibility', 'visible');
+
+	//Add an extra class to the editor toolbars when their "position: sticky" triggers.
+	//This is useful for adding a bottom border and other styles.
+	if (IntersectionObserver) {
+		/*
+		This assumes that the toolbars stick below the admin bar. If that changes,
+		this code will need to be updated.
+
+		How do we detect that?
+		- We could use IntersectionObserver to detect when the toolbar leaves the viewport,
+		  but since it's sticky, it usually won't.
+		- We can get around that by using negative root margins. Negative margins effectively shrink
+		  the bounding box of the viewport. If we set the top margin to "-1px", the effective top of
+		  the viewport will be 1px lower, so the observer will fire just *before* the toolbar would
+		  leave the viewport.
+		- The admin bar is always at the top of the viewport.
+		- So we can detect when the toolbar is right below the admin bar by using a negative top
+		  margin that is equal to the height of the admin bar + 1px.
+		*/
+		let observerRootMargin = '-33px'; //Default admin bar height is 32px.
+		const adminBarHeight = $('#wpadminbar').outerHeight();
+		if (adminBarHeight > 0) {
+			observerRootMargin = (-1 * adminBarHeight - 1) + 'px';
+		}
+
+		const observer = new IntersectionObserver(
+			(entries) => {
+				for (const e of entries) {
+					e.target.classList.toggle('ws_is_sticky_toolbar', e.intersectionRatio < 1);
+				}
+			},
+			{
+				threshold: [1],
+				rootMargin: observerRootMargin + ' 0px 0px 0px'
+			}
+		);
+
+		const editorToolbars = document.querySelectorAll('.ws_main_container .ws_toolbar');
+		for (const toolbar of editorToolbars) {
+			//Skip the toolbar that's inside the template column.
+			if (toolbar.closest && (toolbar.closest('#ame-submenu-column-template') !== null)) {
+				continue;
+			}
+			observer.observe(toolbar);
+		}
+	}
 }
 
 $(document).ready(ameOnDomReady);
@@ -5040,54 +5909,9 @@ var domCheckIntervalId = window.setInterval(function () {
 	domCheckAttempts++;
 
 	if ($ && $.isReady) {
-		isDomReadyDone = true;
+		window.clearInterval(domCheckIntervalId);
 		ameOnDomReady();
 	}
 }, 1000);
 
 })(jQuery, wsAmeLodash);
-
-//==============================================
-//				Screen options
-//==============================================
-
-jQuery(function($){
-	'use strict';
-
-	var screenOptions = $('#ws-ame-screen-meta-contents');
-	var hideSettingsCheckbox = screenOptions.find('#ws-hide-advanced-settings');
-	hideSettingsCheckbox.prop('checked', wsEditorData.hideAdvancedSettings);
-
-	//Update editor state when settings change
-	$('#ws-hide-advanced-settings').click(function(){
-		wsEditorData.hideAdvancedSettings = hideSettingsCheckbox.prop('checked');
-
-		//Show/hide advanced settings dynamically as the user changes the setting.
-		if ($(this).is(hideSettingsCheckbox)) {
-			var menuEditorNode = $('#ws_menu_editor');
-			if ( wsEditorData.hideAdvancedSettings ){
-				menuEditorNode.find('div.ws_advanced').hide();
-				menuEditorNode.find('a.ws_toggle_advanced_fields').text(wsEditorData.captionShowAdvanced).show();
-			} else {
-				menuEditorNode.find('div.ws_advanced').show();
-				menuEditorNode.find('a.ws_toggle_advanced_fields').text(wsEditorData.captionHideAdvanced).hide();
-			}
-		}
-
-		$.post(
-			wsEditorData.adminAjaxUrl,
-			{
-				'action' : 'ws_ame_save_screen_options',
-				'hide_advanced_settings' : wsEditorData.hideAdvancedSettings ? 1 : 0,
-				'show_extra_icons' : wsEditorData.showExtraIcons ? 1 : 0,
-				'_ajax_nonce' : wsEditorData.hideAdvancedSettingsNonce
-			}
-		);
-	});
-
-	//Move our options into the screen meta panel
-	var advSettings = $('#adv-settings');
-	if (advSettings.length > 0) {
-		advSettings.empty().append(screenOptions.show());
-	}
-});

@@ -9,6 +9,10 @@ class wsNewMenuHighlighter {
 	const AJAX_FLAG_ACTION = 'nmh-flag-as-seen';
 	const COOKIE_NAME = 'ws_nmh_pending_seen_urls';
 
+	const MAX_URLS_PER_USER = 700;
+	const MAX_URLS_PER_REQUEST = 100;
+	const MAX_URL_LENGTH = 512;
+
 	static $blacklist = array(
 		//These items are invisible when the theme customizer is available.
 		'themes.php?page=custom-header'     => true,
@@ -37,6 +41,7 @@ class wsNewMenuHighlighter {
 		'post-new.php'                      => true,
 		'profile.php'                       => true,
 		'privacy.php'                       => true,
+		'site-health.php'                   => true,
 		'theme-editor.php'                  => true,
 		'themes.php'                        => true,
 		'tools.php'                         => true,
@@ -51,6 +56,18 @@ class wsNewMenuHighlighter {
 		'sites.php'                         => true,
 		'theme-install.php'                 => true,
 		'upgrade.php'                       => true,
+
+		//Hidden ACF menu. It's used to show the "Welcome to Advanced Custom Fields" page.
+		'edit.php?post_type=acf-field-group&page=acf-settings-info' => true,
+
+		//The Forminator Forms plugin adds some menus, then hides them in "admin_head" hooks.
+		'admin.php?page=forminator-cform-wizard'     => true,
+		'admin.php?page=forminator-cform-view'       => true,
+		'admin.php?page=forminator-poll-wizard'      => true,
+		'admin.php?page=forminator-poll-view'        => true,
+		'admin.php?page=forminator-nowrong-wizard'   => true,
+		'admin.php?page=forminator-knowledge-wizard' => true,
+		'admin.php?page=forminator-quiz-view'        => true,
 	);
 
 	private $menusWithNewSubmenus = array();
@@ -98,7 +115,7 @@ class wsNewMenuHighlighter {
 		if ( $this->isFirstRun ) {
 			$urls = array_keys($this->seenMenuUrls);
 			$this->seenMenuUrls = array();
-			$this->flagAsSeen($urls);
+			$this->flagAsSeen($urls, true);
 		}
 	}
 
@@ -191,14 +208,14 @@ class wsNewMenuHighlighter {
 			))
 		) {
 			$GLOBALS['wp_menu_editor']->register_jquery_plugins();
-			$dependencies[] = 'jquery-cookie';
+			$dependencies[] = 'ame-jquery-cookie';
 		}
 
 		wp_enqueue_script(
 			'ws-nmh-admin-script',
 			plugins_url('assets/highlight-menus.js', __FILE__),
 			$dependencies,
-			'20170503'
+			'20250629-2'
 		);
 
 		wp_localize_script(
@@ -227,6 +244,9 @@ class wsNewMenuHighlighter {
 			exit('Error: The required "urls" parameter is missing.');
 		}
 
+		//JSON decoding will reject severely malformed data, and flagAsSeen() will
+		//further validate the input.
+		//phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 		$json = strval($_POST['urls']);
 		//Unfortunately, WP applies magic quotes to POST data.
 		if ( function_exists('wp_magic_quotes') && did_action('plugins_loaded') ) {
@@ -245,19 +265,30 @@ class wsNewMenuHighlighter {
 			return;
 		}
 
+		//As above, flagAsSeen() does some validation.
+		//phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 		$urls = json_decode(stripslashes($_COOKIE[self::COOKIE_NAME]), true);
 		if ( is_array($urls) ) {
 			$this->flagAsSeen(array_keys($urls));
 		}
 
-		setcookie(self::COOKIE_NAME, '', time() - (24 * 3600));
+		if ( version_compare(phpversion(), '7.3', '>=') ) {
+			setcookie(self::COOKIE_NAME, '', array('expires' => time() - (24 * 3600), 'samesite' => 'Lax'));
+		} else {
+			setcookie(self::COOKIE_NAME, '', time() - (24 * 3600), '', '', is_ssl());
+		}
 	}
 
-	private function flagAsSeen($menuUrls) {
+	private function flagAsSeen($menuUrls, $isInternalCall = false) {
 		if ( empty($menuUrls) || !is_array($menuUrls) ) {
 			return false;
 		}
-		$menuUrls = array_filter($menuUrls);
+		//Reduce the risk of DoS attacks by limiting the number of URLs per request.
+		if ( !$isInternalCall && (count($menuUrls) > self::MAX_URLS_PER_REQUEST) ) {
+			return false;
+		}
+
+		$menuUrls = array_filter($menuUrls, array($this, 'couldBeMenuUrl'));
 		$this->seenMenuUrls = $this->loadSeenMenus();
 
 		//Optimization: Save only if there are changes / new URLs.
@@ -265,9 +296,36 @@ class wsNewMenuHighlighter {
 		$newUrls = array_diff_key($urlIndex, $this->seenMenuUrls);
 		if ( !empty($newUrls) ) {
 			$this->seenMenuUrls = array_merge($this->seenMenuUrls, $urlIndex);
+
+			//To avoid creating huge user meta rows, let's save only the most recent URLs.
+			if ( count($this->seenMenuUrls) > self::MAX_URLS_PER_USER ) {
+				$this->seenMenuUrls = array_slice(
+					$this->seenMenuUrls,
+					-self::MAX_URLS_PER_USER,
+					self::MAX_URLS_PER_USER,
+					true
+				);
+			}
+
 			return update_user_meta(get_current_user_id(), self::STORAGE_KEY, $this->seenMenuUrls);
 		} else {
 			return false;
 		}
+	}
+
+	private function couldBeMenuUrl($input) {
+		if ( !is_string($input) || ($input === '') ) {
+			return false;
+		}
+
+		$input = wp_check_invalid_utf8($input);
+		if ( !$input ) {
+			return false;
+		}
+
+		//Admin menu URLs are not necessarily fully qualified, or even valid
+		//URLs. Some plugins use weird hacks. Let's just verify that the "URL"
+		//is not too huge.
+		return (strlen($input) < self::MAX_URL_LENGTH);
 	}
 }

@@ -1,25 +1,46 @@
-/// <reference path="lodash-3.10.d.ts" />
+/// <reference types="@types/lodash" />
+
+/// <reference path="knockout.d.ts" />
 /// <reference path="common.d.ts" />
 
 declare let wsAmeActorData: any;
 declare var wsAmeLodash: _.LoDashStatic;
-declare let AmeActors: AmeActorManager;
+// noinspection ES6ConvertVarToLetConst -- Intentionally global variable
+var AmeActors: AmeActorManager;
 
 type Falsy = false | null | '' | undefined | 0;
 type Truthy = true | string | 1;
 
 interface CapabilityMap {
-	[capabilityName: string] : boolean;
+	[capabilityName: string]: boolean;
 }
 
 interface IAmeActor {
 	getId(): string;
+
 	getDisplayName(): string;
+
+	isUser(): this is IAmeUser;
+
+	hasOwnCap(capability: string): boolean | null;
+
+	getOwnCapabilities(): CapabilityMap | null;
 }
 
 interface IAmeUser extends IAmeActor {
 	userLogin: string;
 	isSuperAdmin: boolean;
+
+	/**
+	 * Get all roles that this user has.
+	 *
+	 * Note that this returns role IDs, not role objects or actor IDs.
+	 */
+	getRoleIds(): string[];
+}
+
+interface IAmeRole extends IAmeActor {
+	getRoleName(): string;
 }
 
 abstract class AmeBaseActor implements IAmeActor {
@@ -30,7 +51,12 @@ abstract class AmeBaseActor implements IAmeActor {
 
 	groupActors: string[] = [];
 
-	protected constructor(id: string, displayName: string, capabilities: CapabilityMap, metaCapabilities: CapabilityMap = {}) {
+	protected constructor(
+		id: string,
+		displayName: string,
+		capabilities: CapabilityMap,
+		metaCapabilities: CapabilityMap = {}
+	) {
 		this.id = id;
 		this.displayName = displayName;
 		this.capabilities = capabilities;
@@ -46,7 +72,7 @@ abstract class AmeBaseActor implements IAmeActor {
 	 * @param {string} capability
 	 * @returns {boolean|null}
 	 */
-	hasOwnCap(capability: string): boolean {
+	hasOwnCap(capability: string): boolean | null {
 		if (this.capabilities.hasOwnProperty(capability)) {
 			return this.capabilities[capability];
 		}
@@ -56,9 +82,13 @@ abstract class AmeBaseActor implements IAmeActor {
 		return null;
 	}
 
+	getOwnCapabilities(): CapabilityMap | null {
+		return this.capabilities;
+	}
+
 	static getActorSpecificity(actorId: string) {
 		let actorType = actorId.substring(0, actorId.indexOf(':')),
-			specificity = 0;
+			specificity;
 		switch (actorType) {
 			case 'role':
 				specificity = 1;
@@ -86,17 +116,26 @@ abstract class AmeBaseActor implements IAmeActor {
 	getDisplayName(): string {
 		return this.displayName;
 	}
+
+	isUser(): this is IAmeUser {
+		return false;
+	}
 }
 
-class AmeRole extends AmeBaseActor {
+class AmeRole extends AmeBaseActor implements IAmeRole {
 	name: string;
 
-	constructor(roleId: string, displayName: string, capabilities: CapabilityMap, metaCapabilities: CapabilityMap = {}) {
+	constructor(
+		roleId: string,
+		displayName: string,
+		capabilities: CapabilityMap,
+		metaCapabilities: CapabilityMap = {}
+	) {
 		super('role:' + roleId, displayName, capabilities, metaCapabilities);
 		this.name = roleId;
 	}
 
-	hasOwnCap(capability: string): boolean {
+	hasOwnCap(capability: string): boolean | null {
 		//In WordPress, a role name is also a capability name. Users that have the role "foo" always
 		//have the "foo" capability. It's debatable whether the role itself actually has that capability
 		//(WP_Role says no), but it's convenient to treat it that way.
@@ -105,6 +144,10 @@ class AmeRole extends AmeBaseActor {
 		}
 		return super.hasOwnCap(capability);
 	}
+
+	getRoleName(): string {
+		return this.name;
+	}
 }
 
 interface AmeUserPropertyMap {
@@ -112,7 +155,7 @@ interface AmeUserPropertyMap {
 	display_name: string;
 	capabilities: CapabilityMap;
 	meta_capabilities: CapabilityMap;
-	roles : string[];
+	roles: string[];
 	is_super_admin: boolean;
 	id?: number;
 	avatar_html?: string;
@@ -123,7 +166,6 @@ class AmeUser extends AmeBaseActor implements IAmeUser {
 	userId: number = 0;
 	roles: string[];
 	isSuperAdmin: boolean = false;
-	groupActors: string[];
 	avatarHTML: string = '';
 
 	constructor(
@@ -132,7 +174,7 @@ class AmeUser extends AmeBaseActor implements IAmeUser {
 		capabilities: CapabilityMap,
 		roles: string[],
 		isSuperAdmin: boolean = false,
-	    userId?: number,
+		userId?: number,
 		metaCapabilities: CapabilityMap = {}
 	) {
 		super('user:' + userLogin, displayName, capabilities, metaCapabilities);
@@ -157,7 +199,7 @@ class AmeUser extends AmeBaseActor implements IAmeUser {
 			properties.capabilities,
 			properties.roles,
 			properties.is_super_admin,
-			properties.hasOwnProperty('id') ? properties.id : null,
+			properties.id,
 			properties.meta_capabilities
 		);
 
@@ -166,6 +208,14 @@ class AmeUser extends AmeBaseActor implements IAmeUser {
 		}
 
 		return user;
+	}
+
+	isUser(): this is IAmeUser {
+		return true;
+	}
+
+	getRoleIds(): string[] {
+		return this.roles;
 	}
 }
 
@@ -180,11 +230,17 @@ class AmeSuperAdmin extends AmeBaseActor {
 		//The Super Admin has all possible capabilities except the special "do_not_allow" flag.
 		return (capability !== 'do_not_allow');
 	}
+
+	getOwnCapabilities(): CapabilityMap | null {
+		//It's not meaningful to list all capabilities of the Super Admin, because they behave as if
+		//they have all capabilities including non-existent ones.
+		return null;
+	}
 }
 
 interface AmeGrantedCapabilityMap {
 	[actorId: string]: {
-		[capability: string] : any
+		[capability: string]: any
 	}
 }
 
@@ -196,23 +252,36 @@ interface AmeCapabilitySuggestion {
 class AmeActorManager implements AmeActorManagerInterface {
 	private static _ = wsAmeLodash;
 
-	private roles: {[roleId: string] : AmeRole} = {};
-	private users: {[userLogin: string] : AmeUser} = {};
+	private roles: { [roleId: string]: AmeRole } = {};
+	private users: { [userLogin: string]: AmeUser } = {};
+	private specialActors: { [actorId: string]: IAmeActor } = {};
 	private grantedCapabilities: AmeGrantedCapabilityMap = {};
 
 	public readonly isMultisite: boolean = false;
 	private readonly superAdmin: AmeSuperAdmin;
-	private exclusiveSuperAdminCapabilities = {};
+	private exclusiveSuperAdminCapabilities: Record<string, boolean> = {};
 
-	private tagMetaCaps = {};
-	private suspectedMetaCaps: CapabilityMap;
+	private readonly loggedInUserActor: IAmeActor;
+	private readonly anonymousUserActor: IAmeActor;
+
+	private tagMetaCaps: Record<string, boolean> = {};
+	private readonly suspectedMetaCaps: Record<string, string[]>;
 
 	private suggestedCapabilities: AmeCapabilitySuggestion[] = [];
 
-	constructor(roles, users, isMultisite: Truthy | Falsy = false, suspectedMetaCaps: CapabilityMap = {}) {
+	constructor(
+		roles: Record<string, { name: string, capabilities: CapabilityMap }>,
+		users: Record<string, AmeUserPropertyMap>,
+		isMultisite: Truthy | Falsy = false,
+		suspectedMetaCaps: Record<string, string[]> = {}
+	) {
 		this.isMultisite = !!isMultisite;
 
 		AmeActorManager._.forEach(roles, (roleDetails, id) => {
+			if (typeof id === 'undefined') {
+				return;
+			}
+
 			const role = new AmeRole(
 				id,
 				roleDetails.name,
@@ -227,9 +296,7 @@ class AmeActorManager implements AmeActorManagerInterface {
 			this.users[user.userLogin] = user;
 		});
 
-		if (this.isMultisite) {
-			this.superAdmin = new AmeSuperAdmin();
-		}
+		this.superAdmin = new AmeSuperAdmin();
 
 		this.suspectedMetaCaps = suspectedMetaCaps;
 
@@ -249,14 +316,39 @@ class AmeActorManager implements AmeActorManagerInterface {
 		for (let i = 0; i < tagMetaCaps.length; i++) {
 			this.tagMetaCaps[tagMetaCaps[i]] = true;
 		}
+
+		this.loggedInUserActor = new class extends AmeBaseActor {
+			constructor() {
+				super('special:logged_in_user', 'Logged In Users', {});
+			}
+
+			hasOwnCap(capability: string): boolean | null {
+				//The only capability that *all* roles and users have is the special "exist" capability.
+				return (capability === 'exist');
+			}
+		};
+
+		this.anonymousUserActor = new class extends AmeBaseActor {
+			constructor() {
+				super('special:anonymous_user', 'Logged Out Users', {});
+			}
+
+			hasOwnCap(): boolean | null {
+				//Anonymous visitors usually have no capabilities.
+				return false;
+			}
+		}
+
+		this.addSpecialActor(this.loggedInUserActor);
+		this.addSpecialActor(this.anonymousUserActor);
 	}
 
 	// noinspection JSUnusedGlobalSymbols
 	actorCanAccess(
 		actorId: string,
-		grantAccess: {[actorId: string] : boolean},
-		defaultCapability: string = null
-	): boolean {
+		grantAccess: { [actorId: string]: boolean },
+		defaultCapability: string | null = null
+	): boolean | null {
 		if (grantAccess.hasOwnProperty(actorId)) {
 			return grantAccess[actorId];
 		}
@@ -266,7 +358,7 @@ class AmeActorManager implements AmeActorManagerInterface {
 		return true;
 	}
 
-	getActor(actorId): AmeBaseActor {
+	getActor(actorId: string): IAmeActor | null {
 		if (actorId === AmeSuperAdmin.permanentActorId) {
 			return this.superAdmin;
 		}
@@ -279,6 +371,8 @@ class AmeActorManager implements AmeActorManagerInterface {
 			return this.roles.hasOwnProperty(actorKey) ? this.roles[actorKey] : null;
 		} else if (actorType === 'user') {
 			return this.users.hasOwnProperty(actorKey) ? this.users[actorKey] : null;
+		} else if (this.specialActors.hasOwnProperty(actorId)) {
+			return this.specialActors[actorId];
 		}
 
 		throw {
@@ -292,7 +386,13 @@ class AmeActorManager implements AmeActorManagerInterface {
 		try {
 			return (this.getActor(actorId) !== null);
 		} catch (exception) {
-			if (exception.hasOwnProperty('name') && (exception.name === 'InvalidActorException')) {
+			const exceptionAsAny = exception as any;
+			if (
+				(typeof exceptionAsAny === 'object')
+				&& (exceptionAsAny !== null)
+				&& (typeof exceptionAsAny.name === 'string')
+				&& (exceptionAsAny.name === 'InvalidActorException')
+			) {
 				return false;
 			} else {
 				throw exception;
@@ -300,19 +400,23 @@ class AmeActorManager implements AmeActorManagerInterface {
 		}
 	}
 
-	hasCap(actorId: string, capability, context?: {[actor: string] : any}): boolean {
+	hasCap(actorId: string, capability: string, context?: { [actor: string]: any }): boolean | null {
 		context = context || {};
 		return this.actorHasCap(actorId, capability, [context, this.grantedCapabilities]);
 	}
 
-	hasCapByDefault(actorId, capability) {
+	hasCapByDefault(actorId: string, capability: string) {
 		return this.actorHasCap(actorId, capability);
 	}
 
-	private actorHasCap(actorId: string, capability: string, contextList?: Array<Object>): (boolean | null) {
+	private actorHasCap(
+		actorId: string,
+		capability: string,
+		contextList?: Array<Record<string, any>>
+	): (boolean | null) {
 		//It's like the chain-of-responsibility pattern.
 
-		//Everybody has the "exist" cap and it can't be removed or overridden by plugins.
+		//Everybody has the "exist" cap, and it can't be removed or overridden by plugins.
 		if (capability === 'exist') {
 			return true;
 		}
@@ -397,6 +501,60 @@ class AmeActorManager implements AmeActorManagerInterface {
 		return capability;
 	}
 
+	/**
+	 * Check if an actor might have a suspected meta capability.
+	 *
+	 * Returns NULL if the capability is not a detected meta capability, or if the actor ID is invalid.
+	 */
+	maybeHasMetaCap(actorId: string, metaCapability: string): null | { prediction: boolean | null } {
+		//Is this a meta capability?
+		if (!this.suspectedMetaCaps.hasOwnProperty(metaCapability)) {
+			return null;
+		}
+
+		const actor = this.getActor(actorId);
+		if (actor === null) {
+			return null;
+		}
+
+		//For some actors like the current user, we might already know whether they have
+		//the meta capability. The plugin checks that when opening the menu editor.
+		const hasOwnCap = actor.hasOwnCap(metaCapability);
+		if (hasOwnCap !== null) {
+			return {prediction: hasOwnCap};
+		}
+
+		const mappedCaps = this.suspectedMetaCaps[metaCapability];
+		//If we don't know what capabilities this meta capability maps to, we can't predict
+		//whether the actor has it or not.
+		if (mappedCaps.length < 1) {
+			return {prediction: null};
+		}
+		//Hacky workaround for invalid data from the server.
+		if (!(AmeActorManager._.isArray(mappedCaps))) {
+			if (console && console.warn) {
+				console.warn(
+					'AmeActorManager.maybeHasMetaCap: Invalid mapped capabilities for meta capability "'
+					+ metaCapability + '". Expected an array, got:',
+					mappedCaps
+				);
+			}
+			return {prediction: null};
+		}
+
+		//The actor needs to have all the mapped capabilities to have the meta capability.
+		for (const cap of mappedCaps) {
+			if (this.actorHasCap(actorId, cap) !== true) {
+				return {prediction: false};
+			}
+		}
+		return {prediction: true};
+	}
+
+	getSuspectedMetaCaps(): string[] {
+		return AmeActorManager._.keys(this.suspectedMetaCaps);
+	}
+
 	/* -------------------------------
 	 * Roles
 	 * ------------------------------- */
@@ -409,10 +567,6 @@ class AmeActorManager implements AmeActorManagerInterface {
 		return this.roles.hasOwnProperty(roleId);
 	};
 
-	getSuperAdmin() : AmeSuperAdmin {
-		return this.superAdmin;
-	}
-
 	/* -------------------------------
 	 * Users
 	 * ------------------------------- */
@@ -421,7 +575,7 @@ class AmeActorManager implements AmeActorManagerInterface {
 		return this.users;
 	}
 
-	getUser(login: string) {
+	getUser(login: string): IAmeUser | null {
 		return this.users.hasOwnProperty(login) ? this.users[login] : null;
 	}
 
@@ -436,10 +590,38 @@ class AmeActorManager implements AmeActorManagerInterface {
 	}
 
 	/* -------------------------------
+	 * Special actors
+	 * ------------------------------- */
+
+	getSuperAdmin(): AmeSuperAdmin {
+		return this.superAdmin;
+	}
+
+	/**
+	 * Get the special actor that represents any logged-in user.
+	 *
+	 * Note: Not to be confused with the specific user that's currently logged in.
+	 */
+	getGenericLoggedInUser(): IAmeActor {
+		return this.loggedInUserActor;
+	}
+
+	getAnonymousUser(): IAmeActor {
+		return this.anonymousUserActor
+	}
+
+	addSpecialActor(actor: IAmeActor) {
+		if (actor.getId() === AmeSuperAdmin.permanentActorId) {
+			throw 'The Super Admin actor is immutable and cannot be replaced.';
+		}
+		this.specialActors[actor.getId()] = actor;
+	}
+
+	/* -------------------------------
 	 * Granted capability manipulation
 	 * ------------------------------- */
 
-	setGrantedCapabilities(newGrants) {
+	setGrantedCapabilities(newGrants: AmeGrantedCapabilityMap) {
 		this.grantedCapabilities = AmeActorManager._.cloneDeep(newGrants);
 	}
 
@@ -450,7 +632,7 @@ class AmeActorManager implements AmeActorManagerInterface {
 	/**
 	 * Grant or deny a capability to an actor.
 	 */
-	setCap(actor: string, capability: string, hasCap: boolean, sourceType?, sourceName?) {
+	setCap(actor: string, capability: string, hasCap: boolean, sourceType?: string, sourceName?: string) {
 		this.setCapInContext(this.grantedCapabilities, actor, capability, hasCap, sourceType, sourceName);
 	}
 
@@ -474,6 +656,19 @@ class AmeActorManager implements AmeActorManagerInterface {
 		if (AmeActorManager._.has(context, [actor, capability])) {
 			delete context[actor][capability];
 		}
+	}
+
+	/**
+	 * Reset all capabilities granted to an actor.
+	 * @param actor
+	 * @return boolean TRUE if anything was reset or FALSE if the actor didn't have any granted capabilities.
+	 */
+	resetActorCaps(actor: string): boolean {
+		if (AmeActorManager._.has(this.grantedCapabilities, actor)) {
+			delete this.grantedCapabilities[actor];
+			return true;
+		}
+		return false;
 	}
 
 	/**
@@ -531,11 +726,16 @@ class AmeActorManager implements AmeActorManagerInterface {
 		return delta;
 	};
 
-	generateCapabilitySuggestions(capPower): void {
+	generateCapabilitySuggestions(capPower: Record<string, number>): void {
 		let _ = AmeActorManager._;
 
-		let capsByPower = _.memoize((role: AmeRole): {capability: string, power: number}[] => {
-			let sortedCaps = _.reduce(role.capabilities, (result, hasCap, capability) => {
+		interface CapAndPower {
+			capability: string;
+			power: number;
+		}
+
+		let capsByPower = _.memoize((role: AmeRole): CapAndPower[] => {
+			let sortedCaps = _.reduce(role.capabilities, (result: CapAndPower[], hasCap, capability) => {
 				if (hasCap) {
 					result.push({
 						capability: capability,
@@ -549,7 +749,7 @@ class AmeActorManager implements AmeActorManagerInterface {
 			return sortedCaps;
 		});
 
-		let rolesByPower: AmeRole[] = _.values<AmeRole>(this.getRoles()).sort(function(a: AmeRole, b: AmeRole) {
+		let rolesByPower: AmeRole[] = _.values<AmeRole>(this.getRoles()).sort(function (a: AmeRole, b: AmeRole) {
 			let aCaps = capsByPower(a),
 				bCaps = capsByPower(b);
 
@@ -590,15 +790,15 @@ class AmeActorManager implements AmeActorManagerInterface {
 		let deprecatedCaps = _(_.range(0, 10)).map((level) => 'level_' + level).value();
 		deprecatedCaps.push('edit_files');
 
-		let findDiscriminant = (caps: string[], includeRoles: AmeRole[], excludeRoles): string => {
+		let findDiscriminant = (caps: string[], includeRoles: AmeRole[], excludeRoles: AmeRole[]): string => {
 			let getEnabledCaps = (role: AmeRole): string[] => {
-				return _.keys(_.pick(role.capabilities, _.identity));
+				return _.keys(_.pickBy(role.capabilities, _.identity));
 			};
 
-			//Find caps that all of the includeRoles have and excludeRoles don't.
-			let includeCaps = _.intersection.apply(_, _.map(includeRoles, getEnabledCaps)),
-				excludeCaps = _.union.apply(_, _.map(excludeRoles, getEnabledCaps)),
-				possibleCaps = _.without.apply(_, [includeCaps].concat(excludeCaps).concat(deprecatedCaps));
+			//Find caps that all the includeRoles have and excludeRoles don't.
+			let includeCaps = _.intersection(..._.map(includeRoles, getEnabledCaps)),
+				excludeCaps = _.union(..._.map(excludeRoles, getEnabledCaps)),
+				possibleCaps = _.without(includeCaps, ...excludeCaps, ...deprecatedCaps);
 
 			let bestCaps = _.intersection(preferredCaps, possibleCaps);
 
@@ -607,7 +807,7 @@ class AmeActorManager implements AmeActorManagerInterface {
 			} else if (possibleCaps.length > 0) {
 				return possibleCaps[0];
 			}
-			return null;
+			return '';
 		};
 
 		let suggestedCapabilities = [];
@@ -642,19 +842,588 @@ class AmeActorManager implements AmeActorManagerInterface {
 	createUserFromProperties(properties: AmeUserPropertyMap): IAmeUser {
 		return AmeUser.createFromProperties(properties);
 	}
+
+	//Sort the default roles in a fixed order, the rest alphabetically.
+	private static defaultRoleOrder: Record<string, number> = {
+		'role:administrator': 1,
+		'role:editor': 2,
+		'role:author': 3,
+		'role:contributor': 4,
+		'role:subscriber': 5
+	};
+
+	compareRolesForSorting(a: IAmeActor, b: IAmeActor) {
+		const defaultRoleOrder = AmeActorManager.defaultRoleOrder;
+
+		const aId = a.getId();
+		const bId = b.getId();
+		if (defaultRoleOrder.hasOwnProperty(aId) && defaultRoleOrder.hasOwnProperty(bId)) {
+			return defaultRoleOrder[aId] - defaultRoleOrder[bId];
+		} else if (defaultRoleOrder.hasOwnProperty(aId)) {
+			return -1;
+		} else if (defaultRoleOrder.hasOwnProperty(bId)) {
+			return 1;
+		} else {
+			return a.getDisplayName().localeCompare(b.getDisplayName());
+		}
+	}
 }
 
 interface AmeActorManagerInterface {
 	getUsers(): AmeDictionary<IAmeUser>;
-	getUser(login: string): IAmeUser;
-	addUsers(newUsers: IAmeUser[]);
+
+	getUser(login: string): IAmeUser | null;
+
+	addUsers(newUsers: IAmeUser[]): void;
+
 	createUserFromProperties(properties: AmeUserPropertyMap): IAmeUser;
 
 	getRoles(): AmeDictionary<IAmeActor>;
+
 	getSuperAdmin(): IAmeActor;
 
-	getActor(actorId): IAmeActor;
+	getActor(actorId: string): IAmeActor | null;
+
 	actorExists(actorId: string): boolean;
+
+	compareRolesForSorting(a: IAmeActor, b: IAmeActor): number;
+}
+
+type AmeActorFeatureMapData = { [actorId: string]: boolean };
+
+interface AmeActorFeatureMap {
+	get(actorId: string, defaultValue: boolean | null): boolean | null;
+
+	set(actorId: string, value: boolean): void;
+
+	setAll(data: AmeActorFeatureMapData): void;
+
+	getAll(): AmeActorFeatureMapData;
+
+	reset(actorId: string): void;
+
+	resetAll(): void;
+}
+
+class AmeObservableActorFeatureMap implements AmeActorFeatureMap {
+	private items: { [actorId: string]: KnockoutObservable<boolean | null>; } = {};
+	private readonly numberOfObservables: KnockoutObservable<number>;
+
+	constructor(initialData?: AmeDictionary<boolean> | null) {
+		this.numberOfObservables = ko.observable(0);
+		if (initialData) {
+			this.setAll(initialData);
+		}
+	}
+
+	get(actor: string, defaultValue: boolean | null = null): boolean | null {
+		if (this.items.hasOwnProperty(actor)) {
+			const value = this.items[actor]();
+			if (value === null) {
+				return defaultValue;
+			}
+			return value;
+		}
+		this.numberOfObservables(); //Establish a dependency.
+		return defaultValue;
+	}
+
+	set(actor: string, value: boolean) {
+		if (!this.items.hasOwnProperty(actor)) {
+			this.items[actor] = ko.observable<boolean | null>(value);
+			this.numberOfObservables(this.numberOfObservables() + 1);
+		} else {
+			this.items[actor](value);
+		}
+	}
+
+	getAll(): AmeActorFeatureMapData {
+		let result: AmeActorFeatureMapData = {};
+		for (let actorId in this.items) {
+			if (this.items.hasOwnProperty(actorId)) {
+				const value = this.items[actorId]();
+				if (value !== null) {
+					result[actorId] = value;
+				}
+			}
+		}
+		this.numberOfObservables();
+		return result;
+	}
+
+	/**
+	 * Set all values from a map.
+	 *
+	 * Any actors not in the new map will be reset to null.
+	 */
+	setAll(values: AmeActorFeatureMapData) {
+		for (let actorId in values) {
+			if (values.hasOwnProperty(actorId)) {
+				this.set(actorId, values[actorId]);
+			}
+		}
+
+		//Reset any actors that are not in the new values.
+		for (let actorId in this.items) {
+			if (this.items.hasOwnProperty(actorId) && !values.hasOwnProperty(actorId)) {
+				this.items[actorId](null);
+			}
+		}
+	}
+
+	reset(actorId: string): void {
+		if (this.items.hasOwnProperty(actorId)) {
+			this.items[actorId](null);
+		}
+	}
+
+	/**
+	 * Reset all values to null.
+	 */
+	resetAll() {
+		for (let actorId in this.items) {
+			if (this.items.hasOwnProperty(actorId)) {
+				this.items[actorId](null);
+			}
+		}
+	}
+
+	isEnabledFor(
+		selectedActor: IAmeActor | null,
+		allActors: IAmeActor[] | null = null,
+		roleDefault: boolean | null = false,
+		superAdminDefault: boolean | null = null,
+		noValueDefault: boolean = false,
+		outIsIndeterminate: KnockoutObservable<boolean> | null = null
+	): boolean {
+		if (selectedActor === null) {
+			if (allActors === null) {
+				throw 'When the selected actor is NULL, you must provide ' +
+				'a list of all visible actors to determine if the item is enabled for all/any of them';
+			}
+
+			//All: Enabled only if it's enabled for all actors.
+
+			//Handle the theoretically impossible case where the actor list is empty.
+			const actorCount = allActors.length;
+			if (actorCount <= 0) {
+				return noValueDefault;
+			}
+
+			let isEnabledForSome = false, isDisabledForSome = false;
+			for (let index = 0; index < actorCount; index++) {
+				if (this.isEnabledFor(allActors[index], allActors, roleDefault, superAdminDefault, noValueDefault)) {
+					isEnabledForSome = true;
+				} else {
+					isDisabledForSome = true;
+				}
+			}
+
+			if (outIsIndeterminate !== null) {
+				outIsIndeterminate(isEnabledForSome && isDisabledForSome);
+			}
+
+			return isEnabledForSome && (!isDisabledForSome);
+		}
+
+		//Is there an explicit setting for this actor?
+		let ownSetting = this.get(selectedActor.getId(), null);
+		if (ownSetting !== null) {
+			return ownSetting;
+		}
+
+		if (selectedActor instanceof AmeUser) {
+			//The "Super Admin" setting takes precedence over regular roles.
+			if (selectedActor.isSuperAdmin) {
+				let superAdminSetting = this.get(AmeSuperAdmin.permanentActorId, superAdminDefault);
+				if (superAdminSetting !== null) {
+					return superAdminSetting;
+				}
+			}
+
+			//Use role settings.
+			//Enabled for at least one role = enabled.
+			//Disabled for at least one role and no settings for other roles = disabled.
+			let isEnabled: boolean | null = null;
+			for (let i = 0; i < selectedActor.roles.length; i++) {
+				let roleSetting = this.get('role:' + selectedActor.roles[i], roleDefault);
+				if (roleSetting !== null) {
+					if (isEnabled === null) {
+						isEnabled = roleSetting;
+					} else {
+						isEnabled = isEnabled || roleSetting;
+					}
+				}
+			}
+
+			if (isEnabled !== null) {
+				return isEnabled;
+			}
+
+			//If we get this far, it means that none of the user's roles have
+			//a setting for this item. Fall through to the final default.
+		}
+
+		return noValueDefault;
+	}
+
+	setEnabledFor(
+		selectedActor: IAmeActor | null,
+		enabled: boolean,
+		allActors: IAmeActor[] | null = null,
+		defaultValue: boolean | null = null
+	) {
+		if (selectedActor === null) {
+			if (allActors === null) {
+				throw 'When the selected actor is NULL, you must provide ' +
+				'a list of all visible actors so that the item can be enabled or disabled for all of them';
+			}
+
+			//Enable/disable the item for all actors.
+			if (enabled === defaultValue) {
+				//Since the new value is the same as the default,
+				//this is equivalent to removing all settings.
+				this.resetAll();
+			} else {
+				for (let i = 0; i < allActors.length; i++) {
+					this.set(allActors[i].getId(), enabled);
+				}
+			}
+		} else {
+			this.set(selectedActor.getId(), enabled);
+		}
+	}
+}
+
+enum AmeRoleCombinationMode {
+	/**
+	 * Enabled if enabled for every role the user has.
+	 */
+	Every,
+	/**
+	 * Enabled if enabled for at least one role.
+	 */
+	Some,
+	/**
+	 * As "Some", except when at least role one has a custom setting that is `false`
+	 * (i.e. disabled) and none of the other roles have custom settings.
+	 *
+	 * This way explicit "disable"/"deny" settings take precedence over settings
+	 * or permissions that are enabled by default.
+	 */
+	CustomOrSome
+}
+
+interface AmeActorFeatureStrategySettings {
+	getSelectedActor: () => IAmeActor | null;
+	getAllActors: () => IAmeActor[];
+	superAdminDefault: boolean | null;
+	roleDefault: boolean | null | ((roleName: string) => boolean | null);
+	roleCombinationMode: AmeRoleCombinationMode
+	noValueDefault: boolean;
+
+	/**
+	 * Whether to automatically reset (i.e. remove) all settings when changing
+	 * all actors to a new value that is the same as the default.
+	 */
+	autoResetAll: boolean;
+}
+
+type AmeRequiredFeatureStrategyKeys = 'getSelectedActor' | 'getAllActors';
+
+/**
+ * Most of the settings are optional when creating a new strategy.
+ */
+type AmeFeatureStrategyConstructorSettings =
+	Partial<Omit<AmeActorFeatureStrategySettings, AmeRequiredFeatureStrategyKeys>>
+	& Pick<AmeActorFeatureStrategySettings, AmeRequiredFeatureStrategyKeys>;
+
+const AmeActorFeatureStrategyDefaults: Omit<AmeActorFeatureStrategySettings, AmeRequiredFeatureStrategyKeys> = {
+	superAdminDefault: null,
+	roleDefault: null,
+	roleCombinationMode: AmeRoleCombinationMode.CustomOrSome,
+	noValueDefault: false,
+	autoResetAll: true,
+}
+
+type AmeFeatureStrategySerializableInputs = Partial<
+	Pick<AmeActorFeatureStrategySettings, 'superAdminDefault' | 'noValueDefault'>
+	& {
+	roleDefault: boolean | null | Record<string, boolean | null>;
+	roleCombinationMode: 'Every' | 'Some' | 'CustomOrSome';
+}>;
+
+function ameUnserializeFeatureStrategySettings(input: AmeFeatureStrategySerializableInputs): Partial<AmeActorFeatureStrategySettings> {
+	const unserialized: Partial<AmeActorFeatureStrategySettings> = {};
+
+	if (typeof input.superAdminDefault !== 'undefined') {
+		unserialized.superAdminDefault = input.superAdminDefault;
+	}
+
+	if (typeof input.noValueDefault !== 'undefined') {
+		unserialized.noValueDefault = input.noValueDefault;
+	}
+
+	if (typeof input.roleDefault !== 'undefined') {
+		if ((input.roleDefault === null) || (typeof input.roleDefault === 'boolean')) {
+			unserialized.roleDefault = input.roleDefault;
+		} else {
+			const copy = Object.assign({}, input.roleDefault);
+			unserialized.roleDefault = (roleName: string) => copy[roleName] || null;
+		}
+	}
+
+	if (typeof input.roleCombinationMode === 'string') {
+		switch (input.roleCombinationMode) {
+			case 'Every':
+				unserialized.roleCombinationMode = AmeRoleCombinationMode.Every;
+				break;
+			case 'Some':
+				unserialized.roleCombinationMode = AmeRoleCombinationMode.Some;
+				break;
+			case 'CustomOrSome':
+				unserialized.roleCombinationMode = AmeRoleCombinationMode.CustomOrSome;
+				break;
+		}
+	}
+
+	return unserialized;
+}
+
+class AmeActorFeatureStrategy {
+	private readonly settings: AmeActorFeatureStrategySettings;
+
+	constructor(settings: AmeFeatureStrategyConstructorSettings) {
+		this.settings = Object.assign({}, AmeActorFeatureStrategyDefaults, settings);
+	}
+
+	isFeatureEnabled(
+		actorFeatureMap: AmeActorFeatureMap,
+		outIsIndeterminate: KnockoutObservable<boolean> | null = null
+	): boolean {
+		return this.isFeatureEnabledForActor(
+			actorFeatureMap,
+			this.settings.getSelectedActor(),
+			outIsIndeterminate
+		);
+	}
+
+	private isFeatureEnabledForActor(
+		actorFeatureMap: AmeActorFeatureMap,
+		actor: IAmeActor | null,
+		outIsIndeterminate: KnockoutObservable<boolean> | null = null
+	): boolean {
+		if (actor === null) {
+			return this.checkAllActors(actorFeatureMap, outIsIndeterminate);
+		}
+
+		if (outIsIndeterminate !== null) {
+			//The result can only be indeterminate if there are multiple actors.
+			outIsIndeterminate(false);
+		}
+
+		//Is there an explicit setting for this actor?
+		const ownSetting = actorFeatureMap.get(actor.getId(), null);
+		if (ownSetting !== null) {
+			return ownSetting;
+		}
+
+		if (actor.isUser()) {
+			//The "Super Admin" setting takes precedence over regular roles.
+			if (actor.isSuperAdmin) {
+				const superAdminSetting = actorFeatureMap.get(
+					AmeSuperAdmin.permanentActorId,
+					this.settings.superAdminDefault
+				);
+				if (superAdminSetting !== null) {
+					return superAdminSetting;
+				}
+			}
+
+			const isEnabledForRoles = this.checkRoles(actorFeatureMap, actor.getRoleIds());
+			if (isEnabledForRoles !== null) {
+				return isEnabledForRoles;
+			}
+
+			//If we get this far, it means that none of the user's roles have
+			//a setting for this item. Fall through to the final default.
+		}
+
+		return this.settings.noValueDefault;
+	}
+
+	private checkAllActors(
+		actorFeatureMap: AmeActorFeatureMap,
+		outIsIndeterminate: KnockoutObservable<boolean> | null = null
+	): boolean {
+		if (this.settings.getAllActors === null) {
+			throw (
+				'When the selected actor is NULL, you must provide ' +
+				'a callback that retrieves all actors so that it is possible to determine if ' +
+				'the item is enabled for all/any of them'
+			);
+		}
+		const allActors = this.settings.getAllActors();
+		//Handle the theoretically impossible case where the actor list is empty.
+		const actorCount = allActors.length;
+		if (actorCount <= 0) {
+			return this.settings.noValueDefault;
+		}
+
+		let isEnabledForSome = false, isDisabledForSome = false;
+		for (let i = 0; i < actorCount; i++) {
+			const actor = allActors[i];
+			if (this.isFeatureEnabledForActor(actorFeatureMap, actor)) {
+				isEnabledForSome = true;
+			} else {
+				isDisabledForSome = true;
+			}
+		}
+
+		if (outIsIndeterminate !== null) {
+			outIsIndeterminate(isEnabledForSome && isDisabledForSome);
+		}
+		return isEnabledForSome && !isDisabledForSome;
+	}
+
+	private checkRoles(actorFeatureMap: AmeActorFeatureMap, roles: string[]): boolean | null {
+		const length = roles.length;
+		if (length === 0) {
+			return null;
+		}
+
+		//Check role settings.
+		let foundAnySettings = false;
+		let areAllTrue = true;
+		let areSomeTrue = false;
+
+		let foundAnyCustomSettings = false;
+		let areAllCustomTrue = true;
+		let areSomeCustomTrue = false;
+
+		for (let i = 0; i < length; i++) {
+			let roleSetting = actorFeatureMap.get('role:' + roles[i], null);
+
+			if (roleSetting !== null) {
+				foundAnyCustomSettings = true;
+				areSomeCustomTrue = areSomeCustomTrue || roleSetting;
+				areAllCustomTrue = areAllCustomTrue && roleSetting;
+			} else {
+				roleSetting = (typeof this.settings.roleDefault === 'function')
+					? this.settings.roleDefault(roles[i])
+					: this.settings.roleDefault;
+			}
+
+			if (roleSetting !== null) {
+				foundAnySettings = true;
+				areAllTrue = areAllTrue && roleSetting;
+				areSomeTrue = areSomeTrue || roleSetting;
+			}
+		}
+
+		if (!foundAnySettings) {
+			return null;
+		}
+
+		switch (this.settings.roleCombinationMode) {
+			case AmeRoleCombinationMode.Every:
+				return areAllTrue;
+			case AmeRoleCombinationMode.Some:
+				return areSomeTrue;
+			case AmeRoleCombinationMode.CustomOrSome:
+				return foundAnyCustomSettings ? areSomeCustomTrue : areSomeTrue;
+		}
+	}
+
+	setFeatureEnabled(
+		actorFeatureMap: AmeActorFeatureMap,
+		enabled: boolean
+	) {
+		this.setFeatureEnabledForActor(
+			actorFeatureMap,
+			this.settings.getSelectedActor(),
+			enabled
+		);
+	}
+
+	private setFeatureEnabledForActor(
+		actorFeatureMap: AmeActorFeatureMap,
+		actor: IAmeActor | null,
+		enabled: boolean
+	) {
+		if (actor === null) {
+			this.setAllActorStates(actorFeatureMap, enabled);
+			return;
+		}
+
+		//In "Some" combination mode, when the role default is `false`, explicitly disabling something
+		//for a role doesn't matter because custom role settings don't get priority. So we don't need
+		//to store a `false` value in that case.
+		if (
+			!enabled
+			&& (this.settings.roleCombinationMode === AmeRoleCombinationMode.Some)
+			//Is this a role actor?
+			&& actor.getId().startsWith('role:')
+			//Is the effective default for all roles `false`?
+			&& (
+				(this.settings.roleDefault === false)
+				|| ((this.settings.roleDefault === null) && !this.settings.noValueDefault)
+			)
+		) {
+			actorFeatureMap.reset(actor.getId());
+			return;
+		}
+
+		actorFeatureMap.set(actor.getId(), enabled);
+	}
+
+	private setAllActorStates(actorFeatureMap: AmeActorFeatureMap, enabled: boolean) {
+		if (this.settings.getAllActors === null) {
+			throw (
+				'When the selected actor is NULL, you must provide a callback that retrieves ' +
+				'a list of all actors so that the item can be enabled or disabled for all of them'
+			);
+		}
+
+		//Enable/disable the feature for all actors.
+		if (this.settings.autoResetAll && (enabled === this.settings.noValueDefault)) {
+			//Since the new value is the same as the configured default,
+			//this is equivalent to removing all settings.
+			actorFeatureMap.resetAll();
+		} else {
+			const allActors = this.settings.getAllActors();
+			for (let i = 0; i < allActors.length; i++) {
+				actorFeatureMap.set(allActors[i].getId(), enabled);
+			}
+		}
+	}
+}
+
+class AmeActorFeatureState {
+	public readonly isEnabled: KnockoutComputed<boolean>;
+	public readonly isIndeterminate: KnockoutComputed<boolean>;
+
+	constructor(
+		public readonly actorFeatureMap: AmeActorFeatureMap,
+		public readonly strategy: AmeActorFeatureStrategy
+	) {
+		const _isIndeterminate = ko.observable(false);
+		this.isIndeterminate = ko.pureComputed(() => _isIndeterminate());
+
+		this.isEnabled = ko.computed({
+			read: () => {
+				return this.strategy.isFeatureEnabled(this.actorFeatureMap, _isIndeterminate);
+			},
+			write: (value: any) => {
+				const enabled = !!value;
+				this.strategy.setFeatureEnabled(this.actorFeatureMap, enabled);
+			}
+		})
+	}
+
+	toJs(): AmeActorFeatureMapData {
+		return this.actorFeatureMap.getAll();
+	}
 }
 
 if (typeof wsAmeActorData !== 'undefined') {

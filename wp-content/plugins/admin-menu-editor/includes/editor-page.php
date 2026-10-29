@@ -2,7 +2,7 @@
 /**
  * @var array $editor_data Various pieces of data passed by the plugin.
  */
-$current_user = wp_get_current_user();
+$ame_current_user = wp_get_current_user();
 $images_url = $editor_data['images_url'];
 $is_pro_version = apply_filters('admin_menu_editor_is_pro', false);
 $is_second_toolbar_visible = isset($_COOKIE['ame-show-second-toolbar']) && (intval($_COOKIE['ame-show-second-toolbar']) === 1);
@@ -27,43 +27,131 @@ $icons = array(
 foreach($icons as $name => $url) {
 	$icons[$name] = $images_url . $url;
 }
+$icons = apply_filters('admin_menu_editor-toolbar_icons', $icons, $images_url);
 
-$hide_button_extra_tooltip = 'When "All" is selected, this will hide the menu from everyone except the current user'
-	. ($is_multisite ? ' and Super Admin' : '') . '.';
+$toolbarButtons = new ameOrderedMap();
+$toolbarButtons->addAll(array(
+	'cut'           => array(
+		'title' => 'Cut',
+	),
+	'copy'          => array(
+		'title' => 'Copy',
+	),
+	'paste'         => array(
+		'title' => 'Paste',
+	),
+	'separator-1'   => null,
+	'new-menu'      => array(
+		'title' => 'New menu',
+		'iconName' => 'new',
+	),
+	'new-separator' => array(
+		'title' => 'New separator',
+		'topLevelOnly' => !$is_pro_version,
+	),
+	'delete'        => array(
+		'title' => 'Delete menu',
+		'class' => array('ws_delete_menu_button'),
+	),
+	'separator-2'   => null,
+));
 
-//Output the "Upgrade to Pro" message
-if ( !apply_filters('admin_menu_editor_is_pro', false) ){
-	//Pseudo-randomly decide whether to show the VAC link.
-	$is_vac_link_visible = (hexdec( substr(md5(get_site_url() . 'vc3'), -3) ) % 100) <= 20; //20% of sites will see it.
-	?>
-	<script type="text/javascript">
-	(function($){
-		var screenLinks = $('#screen-meta-links'),
-			showVacLink = (<?php echo $is_vac_link_visible ? 'true' : 'false' ?>);
+if ( !$is_pro_version ) {
+	ame_register_sort_buttons($toolbarButtons);
+}
 
-		if (showVacLink) {
-			screenLinks.append(
-				$('<div>', {
-					'class' : 'custom-screen-meta-link-wrap',
-					'id'    : 'ws-visual-admin-customizer-ad'
-				}).append($('<a>', {
-					'href'  : 'https://wordpress.org/plugins/visual-admin-customizer/',
-					'class' : 'show-settings custom-screen-meta-link',
-					'title' : 'A free plugin for customizing the WordPress admin interface',
-					'target': '_blank',
-					'text'  : 'Visual Admin Customizer'
-				}))
+if ( $editor_data['show_deprecated_hide_button'] ) {
+	$toolbarButtons->insertBefore(
+		'delete',
+		'hide',
+		array(
+			'title' => 'Hide without preventing access (cosmetic)',
+			'alt'   => 'Hide (cosmetic)',
+		)
+	);
+}
+
+$secondToolbarRow = new ameOrderedMap();
+if ( $is_pro_version ) {
+	//In the Pro version, the sort buttons are on the second row.
+	ame_register_sort_buttons($secondToolbarRow);
+}
+
+$secondToolbarRowClasses = array('ws_second_toolbar_row');
+if ( !$is_second_toolbar_visible ) {
+	$secondToolbarRowClasses[] = 'hidden';
+}
+
+do_action('admin_menu_editor-register_toolbar_buttons', $toolbarButtons, $secondToolbarRow, $icons);
+
+if ( count($secondToolbarRow) > 0 ) {
+	$toolbarButtons->set(
+		'toggle-toolbar',
+		array(
+			'title' => 'Toggle second toolbar',
+			'alt'   => 'Toolbar toggle',
+			'class' => array('ws_toggle_toolbar_button'),
+			'topLevelOnly' => true,
+		)
+	);
+}
+
+/**
+ * @param ameOrderedMap $buttons
+ * @param array $icons
+ * @param array $classes CSS classes to add to the toolbar row.
+ */
+function ame_output_toolbar_row($buttons, $icons, $classes = array()) {
+	$classes = array_merge(array('ws_button_container'), $classes);
+	printf('<div class="%s">', esc_attr(implode(' ', $classes)));
+
+	foreach ($buttons as $key => $settings) {
+		if ( $settings === null ) {
+			echo '<div class="ws_separator">&nbsp;</div>';
+			continue;
+		}
+
+		if ( !isset($settings['title']) ) {
+			$settings['title'] = $key;
+		}
+		$action = isset($settings['action']) ? $settings['action'] : $key;
+
+		$buttonClasses = array('ws_button');
+		if ( !empty($settings['class']) ) {
+			$buttonClasses = array_merge($buttonClasses, $settings['class']);
+		}
+
+		$attributes = array(
+			'data-ame-button-action' => $action,
+			'class'                  => implode(' ', $buttonClasses),
+			'href'                   => '#',
+			'title'                  => $settings['title'],
+		);
+		if ( isset($settings['attributes']) ) {
+			$attributes = array_merge($attributes, $settings['attributes']);
+		}
+
+		$iconName = isset($settings['iconName']) ? $settings['iconName'] : $key;
+		$icon = '';
+		if ( isset($icons[$iconName]) ) {
+			$icon = sprintf(
+				'<img src="%s" alt="%s">',
+				esc_attr($icons[$iconName]),
+				esc_attr(isset($settings['alt']) ? $settings['alt'] : $settings['title'])
 			);
 		}
 
-		screenLinks.append(
-			'<div id="ws-pro-version-notice" class="custom-screen-meta-link-wrap">' +
-				'<a href="http://adminmenueditor.com/upgrade-to-pro/?utm_source=Admin%2BMenu%2BEditor%2Bfree&utm_medium=text_link&utm_content=top_upgrade_link&utm_campaign=Plugins" id="ws-pro-version-notice-link" class="show-settings custom-screen-meta-link" target="_blank" title="View Pro version details">Upgrade to Pro</a>' +
-			'</div>'
-		);
-	})(jQuery);
-	</script>
-	<?php
+		$pairs = array();
+		foreach ($attributes as $name => $value) {
+			$pairs[] = $name . '="' . esc_attr($value) . '"';
+		}
+
+		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Attribute $pairs and $icon attributes were escaped with esc_attr() above.
+		printf('<a %s>%s</a>' . "\n", implode(' ', $pairs), $icon);
+	}
+
+	echo '<div class="clear"></div>' . "\n";
+	echo '</div>';
 }
 
 ?>
@@ -71,28 +159,37 @@ if ( !apply_filters('admin_menu_editor_is_pro', false) ){
 <?php do_action('admin_menu_editor-display_header'); ?>
 
 <?php
-if ( !empty($_GET['message']) ){
-	if ( intval($_GET['message']) == 2 ) {
-		echo '<div id="message" class="error"><p><strong>Failed to decode input! The menu wasn\'t modified.</strong></p></div>';
-	}
+// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Don't need that here, just showing a notice.
+if ( !empty($_GET['message']) && (intval($_GET['message']) == 2) ){
+	echo '<div id="message" class="error"><p><strong>Failed to decode input! The menu wasn\'t modified.</strong></p></div>';
 }
 
 include dirname(__FILE__) . '/../modules/access-editor/access-editor-template.php';
 $extrasDirectory = dirname(__FILE__) . '/../extras';
 if ( $is_pro_version ) {
-	include $extrasDirectory . '/menu-color-dialog.php';
 	include $extrasDirectory . '/copy-permissions-dialog.php';
 }
 
-function ame_output_sort_buttons($icons) {
-	?>
-	<a class='ws_button ws_sort_menus_button' data-sort-direction="asc" href='javascript:void(0)' title='Sort ascending'>
-		<img src='<?php echo $icons['sort-ascending']; ?>' alt="Sort ascending" />
-	</a>
-	<a class='ws_button ws_sort_menus_button' data-sort-direction="desc" href='javascript:void(0)' title='Sort descending'>
-		<img src='<?php echo $icons['sort-descending']; ?>' alt="Sort descending" />
-	</a>
-	<?php
+/**
+ * @param ameOrderedMap $toolbar
+ */
+function ame_register_sort_buttons($toolbar) {
+	$toolbar->addAll(array(
+		'sort-ascending'  => array(
+			'title'      => 'Sort ascending',
+			'action'     => 'sort',
+			'attributes' => array(
+				'data-sort-direction' => 'asc',
+			),
+		),
+		'sort-descending' => array(
+			'title'      => 'Sort descending',
+			'action'     => 'sort',
+			'attributes' => array(
+				'data-sort-direction' => 'desc',
+			),
+		),
+	));
 }
 
 ?>
@@ -111,132 +208,37 @@ function ame_output_sort_buttons($icons) {
 
 	<div class='ws_main_container'>
 		<div class='ws_toolbar'>
-			<div class="ws_button_container">
-				<a id='ws_cut_menu' class='ws_button' href='javascript:void(0)' title='Cut'><img src='<?php echo $icons['cut']; ?>' alt="Cut" /></a>
-				<a id='ws_copy_menu' class='ws_button' href='javascript:void(0)' title='Copy'><img src='<?php echo $icons['copy']; ?>' alt="Copy" /></a>
-				<a id='ws_paste_menu' class='ws_button' href='javascript:void(0)' title='Paste'><img src='<?php echo $icons['paste']; ?>' alt="Paste" /></a>
-
-				<div class="ws_separator">&nbsp;</div>
-
-				<a id='ws_new_menu' class='ws_button' href='javascript:void(0)' title='New menu'><img src='<?php echo $icons['new']; ?>' alt="New menu" /></a>
-				<a id='ws_new_separator' class='ws_button' href='javascript:void(0)' title='New separator'><img src='<?php echo $icons['new-separator']; ?>' alt="New separator" /></a>
-
-				<?php if ( $is_pro_version ): ?>
-					<div class="ws_separator">&nbsp;</div>
-
-					<a id='ws_hide_and_deny_menu' class='ws_button ws_hide_and_deny_button' href='javascript:void(0)'
-					   title='Hide and prevent access. &#10;<?php echo esc_attr($hide_button_extra_tooltip); ?>'>
-						<img src='<?php echo $icons['hide-and-deny']; ?>' alt="Hide" />
-					</a>
-				<?php endif; ?>
-
-				<?php if ( $editor_data['show_deprecated_hide_button'] ): ?>
-					<a id='ws_hide_menu' class='ws_button' href='javascript:void(0)' title='Hide without preventing access (cosmetic)'><img src='<?php echo $icons['hide']; ?>' alt="Hide (cosmetic)" /></a>
-				<?php endif; ?>
-
-				<a id='ws_delete_menu' class='ws_button ws_delete_menu_button' href='javascript:void(0)' title='Delete menu'><img src='<?php echo $icons['delete']; ?>' alt="Delete menu" /></a>
-
-				<div class="ws_separator">&nbsp;</div>
-
-				<?php
-				if ( !$is_pro_version ) {
-					ame_output_sort_buttons($icons);
-				}
-				?>
-
-				<?php if ( $is_pro_version ): ?>
-					<a id='ws_toggle_toolbar' class='ws_button' href='javascript:void(0)' title='Toggle second toolbar'>
-						<img src='<?php echo $icons['toggle-toolbar']; ?>' alt="Toolbar toggle" />
-					</a>
-				<?php endif; ?>
-
-				<div class="clear"></div>
-			</div>
-
-			<div class="ws_button_container ws_second_toolbar_row <?php
-					if (!$is_second_toolbar_visible) { echo ' hidden'; }
-				?>">
-
-				<?php
-				if ( $is_pro_version ) {
-					ame_output_sort_buttons($icons);
-				}
-				?>
-
-				<?php  if ( $is_pro_version ): ?>
-					<div class="ws_separator">&nbsp;</div>
-
-					<a id='ws_toggle_all_menus' class='ws_button' href='javascript:void(0)'
-					   title='Toggle all menus for the selected role'><img src='<?php echo $icons['toggle-all']; ?>' alt="Toggle all" /></a>
-
-					<a id='ws_copy_role_permissions' class='ws_button' href='javascript:void(0)'
-					   title='Copy all menu permissions from one role to another'><img src='<?php echo $icons['copy-permissions']; ?>' alt="Copy permissions" /></a>
-
-					<div class="ws_separator">&nbsp;</div>
-				<?php endif; ?>
-
-				<div class="clear"></div>
-			</div>
+			<?php
+			ame_output_toolbar_row($toolbarButtons, $icons);
+			ame_output_toolbar_row($secondToolbarRow, $icons, $secondToolbarRowClasses);
+			?>
 		</div>
 
 		<div id='ws_menu_box' class="ws_box">
 		</div>
 
+		<div id="ws_top_menu_dropzone" class="ws_dropzone"> </div>
 		<?php do_action('admin_menu_editor-container', 'menu'); ?>
 	</div>
 
-	<div class='ws_main_container'>
+	<div class='ws_main_container' id="ame-submenu-column-template" style="display: none;">
 		<div class='ws_toolbar'>
-			<div class="ws_button_container">
-				<a id='ws_cut_item' class='ws_button' href='javascript:void(0)' title='Cut'><img src='<?php echo $icons['cut']; ?>' alt="Cut" /></a>
-				<a id='ws_copy_item' class='ws_button' href='javascript:void(0)' title='Copy'><img src='<?php echo $icons['copy']; ?>' alt="Copy" /></a>
-				<a id='ws_paste_item' class='ws_button' href='javascript:void(0)' title='Paste'><img src='<?php echo $icons['paste']; ?>' alt="Paste" /></a>
+			<?php
+			function ame_button_can_be_in_submenu_toolbar($settings) {
+				return empty($settings['topLevelOnly']);
+			}
 
-				<div class="ws_separator">&nbsp;</div>
+			ame_output_toolbar_row(
+				$toolbarButtons->filter('ame_button_can_be_in_submenu_toolbar'),
+				$icons
+			);
 
-				<a id='ws_new_item' class='ws_button' href='javascript:void(0)' title='New menu item'><img src='<?php echo $icons['new']; ?>' alt="New menu item" /></a>
-				<?php if ( $is_pro_version ): ?>
-					<a id='ws_new_submenu_separator' class='ws_button' href='javascript:void(0)' title='New separator'><img src='<?php echo $icons['new-separator']; ?>' alt="New separator" /></a>
-				<?php endif; ?>
-
-				<?php if ( $is_pro_version ): ?>
-					<div class="ws_separator">&nbsp;</div>
-
-					<a id='ws_hide_and_deny_item' class='ws_button ws_hide_and_deny_button' href='javascript:void(0)'
-					   title='Hide and prevent access. &#10;<?php echo esc_attr($hide_button_extra_tooltip); ?>'>
-						<img src='<?php echo $icons['hide-and-deny']; ?>' alt="Hide" />
-					</a>
-				<?php endif; ?>
-
-				<?php if ( $editor_data['show_deprecated_hide_button'] ): ?>
-					<a id='ws_hide_item' class='ws_button' href='javascript:void(0)' title='Hide without preventing access (cosmetic)'><img src='<?php echo $icons['hide']; ?>' alt="Show/Hide" /></a>
-				<?php endif; ?>
-
-				<a id='ws_delete_item' class='ws_button ws_delete_menu_button' href='javascript:void(0)' title='Delete menu item'><img src='<?php echo $icons['delete']; ?>' alt="Delete menu item" /></a>
-
-				<div class="ws_separator">&nbsp;</div>
-
-				<?php
-				if ( !$is_pro_version ) {
-					ame_output_sort_buttons($icons);
-				}
-				?>
-
-				<div class="clear"></div>
-			</div>
-
-			<div class="ws_button_container ws_second_toolbar_row <?php
-					if (!$is_second_toolbar_visible) { echo ' hidden'; }
-				?>">
-
-				<?php
-				if ( $is_pro_version ) {
-					ame_output_sort_buttons($icons);
-				}
-				?>
-
-				<div class="clear"></div>
-			</div>
+			ame_output_toolbar_row(
+				$secondToolbarRow->filter('ame_button_can_be_in_submenu_toolbar'),
+				$icons,
+				$secondToolbarRowClasses
+			);
+			?>
 		</div>
 
 		<div id='ws_submenu_box' class="ws_box">
@@ -248,7 +250,7 @@ function ame_output_sort_buttons($icons) {
 	<div class="ws_basic_container">
 
 		<div class="ws_main_container" id="ws_editor_sidebar">
-		<form method="post" action="<?php echo esc_attr(add_query_arg('noheader', '1', $editor_data['current_tab_url'])); ?>" id='ws_main_form' name='ws_main_form'>
+		<form method="post" action="<?php echo esc_url(add_query_arg('noheader', '1', $editor_data['current_tab_url'])); ?>" id='ws_main_form' name='ws_main_form'>
 			<?php wp_nonce_field('menu-editor-form'); ?>
 			<input type="hidden" name="action" value="save_menu">
 			<?php
@@ -264,7 +266,9 @@ function ame_output_sort_buttons($icons) {
 			<input type="hidden" name="expand_menu" id="ws_expand_selected_menu" value="">
 			<input type="hidden" name="expand_submenu" id="ws_expand_selected_submenu" value="">
 
-			<input type="button" id='ws_save_menu' class="button-primary ws_main_button" value="Save Changes" />
+			<input type="hidden" name="deep_nesting_enabled" id="ws_is_deep_nesting_enabled" value="">
+
+			<button type="button" id='ws_save_menu' class="button button-primary ws_main_button">Save Changes</button>
 		</form>
 
 			<input type="button" id='ws_reset_menu' value="Undo changes" class="button ws_main_button" />
@@ -282,7 +286,7 @@ function ame_output_sort_buttons($icons) {
 			?>
 			<input type="button"
 			       id='ws_toggle_editor_layout'
-			       value="<?php echo $compact_layout_title; ?>"
+			       value="<?php echo esc_attr($compact_layout_title); ?>"
 			       class="button ws_main_button" />
 
 			<?php
@@ -301,7 +305,7 @@ function ame_output_sort_buttons($icons) {
 			$box_class = $is_general_box_open ? '' : 'closed';
 
 			?>
-				<div class="postbox ws_ame_custom_postbox <?php echo $box_class; ?>" id="ws_ame_general_vis_box">
+				<div class="postbox ws_ame_custom_postbox <?php echo esc_attr($box_class); ?>" id="ws_ame_general_vis_box">
 					<button type="button" class="handlediv button-link">
 						<span class="toggle-indicator"></span>
 					</button>
@@ -326,11 +330,11 @@ function ame_output_sort_buttons($icons) {
 		}
 
 		/** @noinspection HtmlUnknownTarget */
-		$how_to_link_template = '<a href="' . htmlspecialchars($tutorial_base_url) . '%1$s" target="_blank" title="Opens in a new tab">%2$s</a>';
+		$how_to_link_template = '<a href="' . esc_url($tutorial_base_url) . '%1$s" target="_blank" title="Opens in a new tab">%2$s</a>';
 		$how_to_item_template = '<li>' . $how_to_link_template . '</li>';
 
 		?>
-			<div class="postbox ws_ame_custom_postbox <?php echo $box_class; ?>" id="ws_ame_how_to_box">
+			<div class="postbox ws_ame_custom_postbox <?php echo esc_attr($box_class); ?>" id="ws_ame_how_to_box">
 				<button type="button" class="handlediv button-link">
 					<span class="toggle-indicator"></span>
 				</button>
@@ -342,7 +346,12 @@ function ame_output_sort_buttons($icons) {
 							//Pro version tutorials.
 							?>
 							<li><?php
-								printf($how_to_link_template, 'how-to-hide-a-menu-item/', 'Hide a Menu...');
+								printf(
+									//phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- HTML template contains HTML.
+									$how_to_link_template,
+									'how-to-hide-a-menu-item/',
+									'Hide a Menu...'
+								);
 								?>
 								<ul class="ame-tutorial-list">
 									<?php
@@ -355,7 +364,12 @@ function ame_output_sort_buttons($icons) {
 										)
 										as $how_to_url => $how_to_title
 									) {
-										printf($how_to_item_template, esc_attr($how_to_url), $how_to_title);
+										printf(
+											//phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- HTML template.
+											$how_to_item_template,
+											esc_attr($how_to_url),
+											esc_html($how_to_title)
+										);
 									}
 									?>
 								</ul>
@@ -369,7 +383,12 @@ function ame_output_sort_buttons($icons) {
 								)
 								as $how_to_url => $how_to_title
 							) {
-								printf($how_to_item_template, esc_attr($how_to_url), $how_to_title);
+								printf(
+								//phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- HTML template
+									$how_to_item_template,
+									esc_attr($how_to_url),
+									esc_html($how_to_title)
+								);
 							}
 
 						else:
@@ -382,7 +401,12 @@ function ame_output_sort_buttons($icons) {
 								)
 								as $how_to_url => $how_to_title
 							) {
-								printf($how_to_item_template, esc_attr($how_to_url), $how_to_title);
+								printf(
+								//phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- HTML template
+									$how_to_item_template,
+									esc_attr($how_to_url),
+									esc_html($how_to_title)
+								);
 							}
 						endif;
 						?>
@@ -395,38 +419,104 @@ function ame_output_sort_buttons($icons) {
 		$hint_id = 'ws_sidebar_pro_ad';
 		$show_pro_benefits = !apply_filters('admin_menu_editor_is_pro', false) && (!isset($editor_data['show_hints'][$hint_id]) || $editor_data['show_hints'][$hint_id]);
 
-		if ( $show_pro_benefits ):
-			$benefit_variations = array(
-				'Hide dashboard widgets.',
-				'More menu icons.',
-				'Make menus open in a new tab or an iframe.',
-				'Prevent users from deleting a specific user.',
-			);
-			//Pseudo-randomly select one phrase based on the site URL.
-			$variation_index = hexdec( substr(md5(get_site_url() . 'ab'), -2) ) % count($benefit_variations);
-			$selected_variation = $benefit_variations[$variation_index];
+		if ( $show_pro_benefits):
+			//Decide whether to show the Pro version link, or a link to one of our other WP tools.
+			$hash_value = hexdec(substr(md5(get_site_url()), 0, 5)) % 100;
 
-			$pro_version_link = 'http://adminmenueditor.com/upgrade-to-pro/?utm_source=Admin%2BMenu%2BEditor%2Bfree&utm_medium=text_link&utm_content=sidebar_link_nv' . $variation_index . '&utm_campaign=Plugins';
-			?>
-			<div class="clear"></div>
+			//Pick one option proportionally to the weights. Weights should add up to 100.
+			$sidebar_ad_weights = [
+				'pro'                 => 85,
+				'adminNoticesBoss'    => 13,
+				'adminThemeGenerator' => 2,
+			];
+			$chosen_ad = array_keys($sidebar_ad_weights)[0];
+			$cumulative_weight = 0;
+			foreach ($sidebar_ad_weights as $ad => $weight) {
+				$cumulative_weight += $weight;
+				$chosen_ad = $ad;
+				if ($hash_value < $cumulative_weight) {
+					break;
+				}
+			}
 
-			<div class="ws_hint" id="<?php echo esc_attr($hint_id); ?>">
-				<div class="ws_hint_close" title="Close">x</div>
-				<div class="ws_hint_content">
-					<strong>Upgrade to Pro:</strong>
-					<ul>
-						<li>Role-based menu permissions.</li>
-						<li>Hide items from specific users.</li>
-						<li>Menu import and export.</li>
-						<li>Change menu colors.</li>
-						<li><?php echo $selected_variation; ?></li>
-					</ul>
-					<a href="<?php echo esc_attr($pro_version_link); ?>" target="_blank">Learn more</a>
-					|
-					<a href="http://amedemo.com/" target="_blank">Try online demo</a>
+			if ($chosen_ad === 'pro'):
+				$benefit_variations = array(
+					'Hide dashboard widgets.',
+					'More menu icons.',
+					'Make menus open in a new tab or an iframe.',
+					'Prevent users from deleting a specific user.',
+				);
+				//Pseudo-randomly select one phrase based on the site URL.
+				$variation_index = hexdec( substr(md5(get_site_url() . 'ab'), -2) ) % count($benefit_variations);
+				$selected_variation = $benefit_variations[$variation_index];
+
+				$pro_version_link = 'https://adminmenueditor.com/upgrade-to-pro/?utm_source=Admin%2BMenu%2BEditor%2Bfree&utm_medium=text_link&utm_content=sidebar_link_nv' . $variation_index . '&utm_campaign=Plugins';
+				?>
+				<div class="clear"></div>
+
+				<div class="ws_hint" id="<?php echo esc_attr($hint_id); ?>">
+					<div class="ws_hint_close" title="Close">x</div>
+					<div class="ws_hint_content">
+						<strong>Upgrade to Pro:</strong>
+						<ul>
+							<li>Role-based menu permissions.</li>
+							<li>Hide items from specific users.</li>
+							<li>Menu import and export.</li>
+							<li>Change menu colors.</li>
+							<li><?php echo esc_html($selected_variation); ?></li>
+						</ul>
+						<a href="<?php echo esc_url($pro_version_link); ?>" target="_blank">Learn more</a>
+						|
+						<a href="https://amedemo.com/" target="_blank">Try online demo</a>
+					</div>
 				</div>
-			</div>
-		<?php
+			<?php
+			elseif ($chosen_ad === 'adminThemeGenerator'):
+				?>
+				<div class="clear"></div>
+
+				<div class="ws_hint ame-tgc-sidebar-ad" id="<?php echo esc_attr($hint_id); ?>">
+					<div class="ws_hint_close" title="Close">x</div>
+					<div class="ws_hint_content">
+						<strong>Discover AdminThemeGenerator.com</strong>
+						<ul>
+							<li>A free
+								<abbr title="An admin theme is a plugin that changes the appearance of the WordPress admin dashboard">
+									admin theme
+								</abbr>
+								generator based on the Pro version of Admin Menu Editor.
+							</li>
+							<li>Design your own admin color scheme.</li>
+							<li>Change admin menu and Toolbar size.</li>
+							<li>Customize button, widget, and table styles.</li>
+						</ul>
+						<a href="<?php echo esc_url('https://adminthemegenerator.com/'); ?>" target="_blank">
+							AdminThemeGenerator.com<span class="dashicons dashicons-external"></span>
+						</a>
+					</div>
+				</div>
+			<?php
+			elseif ($chosen_ad === 'adminNoticesBoss'):
+				?>
+				<div class="clear"></div>
+
+				<div class="ws_hint ame-anb-sidebar-ad" id="<?php echo esc_attr($hint_id); ?>">
+					<div class="ws_hint_close" title="Close">x</div>
+					<div class="ws_hint_content">
+						<strong><span>Check out my other plugin: </span>Admin Notices Boss</strong>
+						<ul>
+							<li>Hide individual admin notices permanently.</li>
+							<li>Move notices to an unobtrusive panel.</li>
+							<li>Hide notices for specific roles or users.</li>
+							<li>Hide notices based on type (warning, info, etc).</li>
+						</ul>
+						<a href="<?php echo esc_url('https://adminnoticesboss.com/'); ?>" target="_blank">
+							AdminNoticesBoss.com<span class="dashicons dashicons-external"></span>
+						</a>
+					</div>
+				</div>
+			<?php
+			endif;
 		endif;
 		?>
 
@@ -451,7 +541,7 @@ function ame_output_sort_buttons($icons) {
  		$capSelector[] = sprintf(
 		 	'<option value="%s">%s</option>',
 		 	esc_attr($role_id),
-		 	$role_name
+		 	esc_html($role_name)
 	 	);
  	}
  	$capSelector[] = '</optgroup>';
@@ -461,12 +551,13 @@ function ame_output_sort_buttons($icons) {
  		$capSelector[] = sprintf(
 		 	'<option value="%s">%s</option>',
 		 	esc_attr($cap),
-		 	$cap
+		 	esc_html($cap)
 	 	);
  	}
  	$capSelector[] = '</optgroup>';
  	$capSelector[] = '</select>';
 
+	 // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Generated HTML, should be escaped above.
  	echo implode("\n", $capSelector);
 ?>
 
@@ -478,17 +569,21 @@ function ame_output_sort_buttons($icons) {
 		<?php
 		$iconSelectorTabs = apply_filters(
 			'admin_menu_editor-icon_selector_tabs',
-			array('ws_core_icons_tab' => 'Dashicons')
+			new ameOrderedMap([
+				'ws_core_icons_tab' => 'Dashicons',
+				'ws_svg_icon_tab'   => 'SVG',
+			])
 		);
-		foreach($iconSelectorTabs as $id => $caption) {
-			printf('<li><a href="#%s">%s</a></li>', esc_attr($id), $caption);
+		foreach($iconSelectorTabs as $tabId => $caption) {
+			/** @noinspection HtmlUnknownAnchorTarget -- It's a printf placeholder. */
+			printf('<li><a href="#%s">%s</a></li>', esc_attr($tabId), esc_html($caption));
 		}
 		?>
 	</ul>
 
 	<?php
 	//Let the user select a custom icon via the media uploader.
-	//We only support the new WP 3.5+ media API. Hence the function_exists() check.
+	//We only support the new WP 3.5+ media API. Hence, the function_exists() check.
 	if ( function_exists('wp_enqueue_media') ):
 		?>
 		<input type="button" class="button"
@@ -501,88 +596,365 @@ function ame_output_sort_buttons($icons) {
 	?>
 
 	<div class="ws_tool_tab" id="ws_core_icons_tab">
+		<div class="ws_icon_search_bar">
+			<label>
+				<span class="screen-reader-text">Icon search box</span>
+				<input type="text" class="regular-text ws_icon_search_box" placeholder="Search icons">
+			</label>
+		</div>
 
 	<?php
-	//The old "menu-icon-something" icons are only available in WP 3.8.x and below. Newer versions use Dashicons.
-	//Plugins can change $wp_version to something useless for security, so lets check if Dashicons are available
-	//before we throw away the old icons.
-	$oldMenuIconsAvailable = ( !$editor_data['dashicons_available'] )
-		|| version_compare($GLOBALS['wp_version'], '3.9-beta', '<');
-
-	if ($oldMenuIconsAvailable) {
-		$defaultWpIcons = array(
-			'generic', 'dashboard', 'post', 'media', 'links', 'page', 'comments',
-			'appearance', 'plugins', 'users', 'tools', 'settings', 'site',
-		);
-		foreach($defaultWpIcons as $icon) {
-			printf(
-				'<div class="ws_icon_option" title="%1$s" data-icon-class="menu-icon-%2$s">
-					<div class="ws_icon_image icon16 icon-%2$s"><br></div>
-				</div>',
-				esc_attr(ucwords($icon)),
-				$icon
-			);
-		}
-	}
-
 	//These dashicons are used in the default admin menu.
 	$defaultDashicons = array(
 		'admin-generic', 'dashboard', 'admin-post', 'admin-media', 'admin-links', 'admin-page', 'admin-comments',
 		'admin-appearance', 'admin-plugins', 'admin-users', 'admin-tools', 'admin-settings', 'admin-network',
 	);
 
-	//The rest of Dashicons. Some icons were manually removed as they wouldn't look good as menu icons.
+	//The rest of Dashicons.
 	$dashicons = array(
-		'admin-site', 'admin-home',
-		'album', 'align-center', 'align-left', 'align-none', 'align-right',
-		'analytics', 'archive', 'art', 'awards', 'backup', 'book', 'book-alt',
-		'building', 'businessman', 'calendar', 'calendar-alt', 'camera', 'carrot',
-		'cart', 'category', 'chart-area', 'chart-bar', 'chart-line', 'chart-pie',
-		'clipboard', 'clock', 'cloud', 'desktop', 'dismiss', 'download', 'edit', 'editor-code', 'editor-contract', 'editor-customchar',
-		'editor-distractionfree', 'editor-help', 'editor-insertmore',
-		'editor-justify', 'editor-kitchensink', 'editor-ol', 'editor-paste-text',
-		'editor-paste-word', 'editor-quote', 'editor-removeformatting', 'editor-rtl', 'editor-spellcheck',
-		'editor-ul', 'editor-unlink', 'editor-video',
-		'email', 'email-alt', 'exerpt-view', 'external', 'facebook',
-		'facebook-alt', 'feedback', 'filter', 'flag', 'format-aside',
-		'format-audio', 'format-chat', 'format-gallery', 'format-image', 'format-quote', 'format-status',
-		'format-video', 'forms', 'googleplus', 'grid-view', 'groups',
-		'hammer', 'heart', 'hidden', 'id', 'id-alt', 'image-crop', 'image-filter',
-		'image-flip-horizontal', 'image-flip-vertical', 'image-rotate',
-		'image-rotate-left', 'image-rotate-right', 'images-alt',
-		'images-alt2', 'index-card', 'info', 'leftright', 'lightbulb', 'list-view',
-		'location', 'location-alt', 'lock', 'marker',
-		'media-archive', 'media-audio',	'media-code', 'media-default', 'media-video', 'megaphone',
-		'menu', 'microphone', 'migrate', 'minus', 'money', 'nametag', 'networking', 'no',
-		'no-alt', 'palmtree', 'performance', 'phone', 'playlist-audio',
-		'playlist-video', 'plus', 'plus-alt', 'portfolio', 'post-status', 'post-trash',
-		'pressthis', 'products', 'redo', 'rss', 'schedule',
-		'screenoptions', 'search', 'share', 'share-alt',
-		'share-alt2', 'share1', 'shield', 'shield-alt', 'slides', 'smartphone', 'smiley', 'sort', 'sos', 'star-empty',
-		'star-filled', 'star-half', 'sticky', 'store', 'tablet', 'tag',
-		'tagcloud', 'testimonial', 'text', 'thumbs-down', 'thumbs-up', 'translation', 'twitter', 'undo',
-		'universal-access',	'universal-access-alt', 'unlock',
-		'update', 'upload', 'vault', 'video-alt', 'video-alt2', 'video-alt3', 'visibility', 'warning', 'welcome-add-page',
-		'welcome-comments', 'welcome-learn-more', 'welcome-view-site', 'welcome-widgets-menus', 'welcome-write-blog',
-		'wordpress', 'wordpress-alt', 'yes'
+		'menu',
+		'admin-site',
+		'admin-home',
+		'admin-collapse',
+		'filter',
+		'admin-customizer',
+		'admin-multisite',
+		'format-image',
+		'format-gallery',
+		'format-audio',
+		'format-video',
+		'format-chat',
+		'format-status',
+		'format-aside',
+		'format-quote',
+		'welcome-write-blog',
+		'welcome-add-page',
+		'welcome-view-site',
+		'welcome-widgets-menus',
+		'welcome-comments',
+		'welcome-learn-more',
+		'image-crop',
+		'image-rotate',
+		'image-rotate-left',
+		'image-rotate-right',
+		'image-flip-vertical',
+		'image-flip-horizontal',
+		'image-filter',
+		'undo',
+		'redo',
+		'editor-bold',
+		'editor-italic',
+		'editor-ul',
+		'editor-ol',
+		'editor-quote',
+		'editor-alignleft',
+		'editor-aligncenter',
+		'editor-alignright',
+		'editor-insertmore',
+		'editor-spellcheck',
+		'editor-expand',
+		'editor-contract',
+		'editor-kitchensink',
+		'editor-underline',
+		'editor-justify',
+		'editor-textcolor',
+		'editor-paste-word',
+		'editor-paste-text',
+		'editor-removeformatting',
+		'editor-video',
+		'editor-customchar',
+		'editor-outdent',
+		'editor-indent',
+		'editor-help',
+		'editor-strikethrough',
+		'editor-unlink',
+		'editor-rtl',
+		'editor-break',
+		'editor-code',
+		'editor-paragraph',
+		'editor-table',
+		'align-left',
+		'align-right',
+		'align-center',
+		'align-none',
+		'lock',
+		'unlock',
+		'calendar',
+		'calendar-alt',
+		'visibility',
+		'hidden',
+		'post-status',
+		'edit',
+		'edit-large',
+		'sticky',
+		'external',
+		'arrow-up',
+		'arrow-down',
+		'arrow-left',
+		'arrow-right',
+		'arrow-up-alt',
+		'arrow-down-alt',
+		'arrow-left-alt',
+		'arrow-right-alt',
+		'arrow-up-alt2',
+		'arrow-down-alt2',
+		'arrow-left-alt2',
+		'arrow-right-alt2',
+		'leftright',
+		'sort',
+		'randomize',
+		'list-view',
+		'excerpt-view',
+		'grid-view',
+		'move',
+		'hammer',
+		'art',
+		'migrate',
+		'performance',
+		'universal-access',
+		'universal-access-alt',
+		'tickets',
+		'nametag',
+		'clipboard',
+		'heart',
+		'megaphone',
+		'schedule',
+		'wordpress',
+		'wordpress-alt',
+		'pressthis',
+		'update',
+		'screenoptions',
+		'cart',
+		'feedback',
+		'translation',
+		'tag',
+		'category',
+		'archive',
+		'tagcloud',
+		'text',
+		'media-archive',
+		'media-audio',
+		'media-code',
+		'media-default',
+		'media-document',
+		'media-interactive',
+		'media-spreadsheet',
+		'media-text',
+		'media-video',
+		'playlist-audio',
+		'playlist-video',
+		'controls-play',
+		'controls-pause',
+		'controls-forward',
+		'controls-skipforward',
+		'controls-back',
+		'controls-skipback',
+		'controls-repeat',
+		'controls-volumeon',
+		'controls-volumeoff',
+		'yes',
+		'no',
+		'no-alt',
+		'plus',
+		'plus-alt',
+		'plus-alt2',
+		'minus',
+		'dismiss',
+		'marker',
+		'star-filled',
+		'star-half',
+		'star-empty',
+		'flag',
+		'info',
+		'warning',
+		'share',
+		'share1',
+		'share-alt',
+		'share-alt2',
+		'twitter',
+		'rss',
+		'email',
+		'email-alt',
+		'facebook',
+		'facebook-alt',
+		'networking',
+		'googleplus',
+		'location',
+		'location-alt',
+		'camera',
+		'images-alt',
+		'images-alt2',
+		'video-alt',
+		'video-alt2',
+		'video-alt3',
+		'vault',
+		'shield',
+		'shield-alt',
+		'sos',
+		'search',
+		'slides',
+		'analytics',
+		'chart-pie',
+		'chart-bar',
+		'chart-line',
+		'chart-area',
+		'groups',
+		'businessman',
+		'id',
+		'id-alt',
+		'products',
+		'awards',
+		'forms',
+		'testimonial',
+		'portfolio',
+		'book',
+		'book-alt',
+		'download',
+		'upload',
+		'backup',
+		'clock',
+		'lightbulb',
+		'microphone',
+		'desktop',
+		'laptop',
+		'tablet',
+		'smartphone',
+		'phone',
+		'smiley',
+		'index-card',
+		'carrot',
+		'building',
+		'store',
+		'album',
+		'palmtree',
+		'tickets-alt',
+		'money',
+		'thumbs-up',
+		'thumbs-down',
+		'layout',
+		'paperclip',
+		'email-alt2',
+		'menu-alt',
+		'trash',
+		'heading',
+		'insert',
+		'align-full-width',
+		'button',
+		'align-wide',
+		'ellipsis',
+		'buddicons-activity',
+		'buddicons-buddypress-logo',
+		'buddicons-community',
+		'buddicons-forums',
+		'buddicons-friends',
+		'buddicons-groups',
+		'buddicons-pm',
+		'buddicons-replies',
+		'buddicons-topics',
+		'buddicons-tracking',
+		'admin-site-alt',
+		'admin-site-alt2',
+		'admin-site-alt3',
+		'rest-api',
+		'yes-alt',
+		'buddicons-bbpress-logo',
+		'tide',
+		'editor-ol-rtl',
+		'instagram',
+		'businessperson',
+		'businesswoman',
+		'color-picker',
+		'camera-alt',
+		'editor-ltr',
+		'cloud',
+		'twitter-alt',
+		'menu-alt2',
+		'menu-alt3',
+		'plugins-checked',
+		'text-page',
+		'update-alt',
+		'code-standards',
+		'align-pull-left',
+		'align-pull-right',
+		'block-default',
+		'cloud-saved',
+		'cloud-upload',
+		'columns',
+		'cover-image',
+		'embed-audio',
+		'embed-generic',
+		'embed-photo',
+		'embed-post',
+		'embed-video',
+		'exit',
+		'html',
+		'info-outline',
+		'insert-after',
+		'insert-before',
+		'remove',
+		'shortcode',
+		'table-col-after',
+		'table-col-before',
+		'table-col-delete',
+		'table-row-after',
+		'table-row-before',
+		'table-row-delete',
+		'saved',
+		'airplane',
+		'amazon',
+		'bank',
+		'beer',
+		'bell',
+		'calculator',
+		'coffee',
+		'database-add',
+		'database-export',
+		'database-import',
+		'database-remove',
+		'database-view',
+		'database',
+		'drumstick',
+		'edit-page',
+		'food',
+		'fullscreen-alt',
+		'fullscreen-exit-alt',
+		'games',
+		'google',
+		'hourglass',
+		'linkedin',
+		'money-alt',
+		'open-folder',
+		'pdf',
+		'pets',
+		'pinterest',
+		'printer',
+		'privacy',
+		'reddit',
+		'spotify',
+		'superhero-alt',
+		'superhero',
+		'twitch',
+		'whatsapp',
+		'youtube',
+		'car',
+		'podio',
+		'xing',
 	);
 
 	if ($editor_data['dashicons_available']) {
 		function ws_ame_print_dashicon_option($icon, $isExtraIcon = false) {
 			printf(
 				'<div class="ws_icon_option%3$s" title="%1$s" data-icon-url="dashicons-%2$s">
-					<div class="ws_icon_image icon16 dashicons dashicons-%2$s"></div>
+					<div class="ws_icon_image dashicons dashicons-%2$s"></div>
 				</div>',
 				esc_attr(ucwords(str_replace('-', ' ', $icon))),
-				$icon,
+				esc_attr($icon),
 				$isExtraIcon ? ' ws_icon_extra' : ''
 			);
 		}
 
-		if ( !$oldMenuIconsAvailable ) {
-			foreach($defaultDashicons as $icon) {
-				ws_ame_print_dashicon_option($icon);
-			}
+		foreach($defaultDashicons as $icon) {
+			ws_ame_print_dashicon_option($icon);
 		}
 		foreach($dashicons as $icon) {
 			ws_ame_print_dashicon_option($icon, true);
@@ -590,41 +962,42 @@ function ame_output_sort_buttons($icons) {
 	}
 
 	$defaultIconImages = array(
-		admin_url('images/generic.png'),
+		'Blue-grey cogwheel (generic menu icon used by old WP versions)' => admin_url('images/generic.png'),
 	);
-	foreach($defaultIconImages as $icon) {
+	foreach($defaultIconImages as $name => $icon) {
 		printf(
 			'<div class="ws_icon_option" data-icon-url="%1$s">
-				<img src="%1$s">
+				<img src="%1$s" alt="%2$s">
 			</div>',
-			esc_attr($icon)
+			esc_attr($icon),
+			esc_attr($name)
 		);
 	}
 
 	?>
 	<div class="ws_icon_option ws_custom_image_icon" title="Custom image" style="display: none;">
-		<img src="<?php echo esc_attr(admin_url('images/loading.gif')); ?>">
+		<img src="<?php echo esc_url(admin_url('images/loading.gif')); ?>" alt="Loading indicator">
 	</div>
 
+		<div class="ws_no_matching_icons" style="display: none">No results found</div>
 		<div class="clear"></div>
 	</div>
+
+		<div class="ws_tool_tab" id="ws_svg_icon_tab">
+			<label for="ws_menu_svg_icon_code">Paste SVG code here:</label>
+			<textarea name="ws_menu_svg_icon_code" id="ws_menu_svg_icon_code"
+			          class="code" cols="30" rows="5"></textarea>
+			<input type="button" class="button"
+			       id="ws_apply_svg_icon"
+			       title="Apply the SVG code as menu icon"
+			       value="Apply">
+		</div>
 
 		<?php do_action('admin_menu_editor-icon_selector'); ?>
 
 	</div><!-- tab container -->
 
 </div>
-
-<span id="ws-ame-screen-meta-contents" style="display:none;">
-	<label for="ws-hide-advanced-settings">
-		<input type="checkbox" id="ws-hide-advanced-settings"<?php
-			if ( $this->options['hide_advanced_settings'] ){
-				echo ' checked="checked"';
-			}
-		?> /> Hide advanced options
-	</label><br>
-</span>
-
 
 <!-- Confirmation dialog when hiding "Dashboard -> Home" -->
 <div id="ws-ame-dashboard-hide-confirmation" style="display: none;">
@@ -671,7 +1044,7 @@ function ame_output_sort_buttons($icons) {
 		<?php
 		submit_button('Hide it from all users', 'secondary', 'ws_hide_menu_from_everyone', false);
 		submit_button(
-			sprintf('Hide it from everyone except "%s"', $current_user->get('user_login')),
+			sprintf('Hide it from everyone except "%s"', $ame_current_user->get('user_login')),
 			'secondary',
 			'ws_hide_menu_except_current_user',
 			false
@@ -700,6 +1073,12 @@ if ( $is_pro_version ) {
 
 <!--suppress JSUnusedLocalSymbols These variables are actually used by menu-editor.js -->
 <script type='text/javascript'>
-var defaultMenu = <?php echo $editor_data['default_menu_js']; ?>;
-var customMenu = <?php echo $editor_data['custom_menu_js']; ?>;
+	var defaultMenu = <?php
+		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Should be JSON.
+		echo $editor_data['default_menu_js'];
+		?>;
+	var customMenu = <?php
+		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Should also be JSON.
+		echo $editor_data['custom_menu_js'];
+		?>;
 </script>

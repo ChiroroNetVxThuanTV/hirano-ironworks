@@ -1,5 +1,8 @@
 <?php
 
+use YahnisElsts\AdminMenuEditor\WebpackRegistry\WebpackAssetRegistry;
+use YahnisElsts\WpDependencyWrapper\v1\ScriptDependency;
+
 class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	const WPML_CONTEXT = 'admin-menu-editor menu texts';
 
@@ -9,6 +12,8 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 	const DIRECTLY_GRANTED_VIRTUAL_CAPS = 2;
 	const ALL_VIRTUAL_CAPS = 3;
+
+	const ADMIN_MENU_STRUCTURE_COMPONENT = 'admin_menu_structure';
 
 	/**
 	 * @var string The heading tag to use for admin pages.
@@ -30,8 +35,6 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	private $old_wp_menu;
 	private $old_wp_submenu;
 
-	private $title_lookups = array();   //A list of page titles indexed by $item['file']. Used to
-	                                    //fix the titles of moved plugin pages.
 	private $reverse_item_lookup = array(); //Contains the final (merged & filtered) list of admin menu items,
                                             //indexed by URL.
 
@@ -81,8 +84,14 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 */
 	private $cached_user_roles = array();
 
+	private $cached_virtual_user_caps = array();
+	private $virtual_caps_for_this_call = array();
+
+	public $disable_virtual_caps = false;
+	public $virtual_cap_mode = self::ALL_VIRTUAL_CAPS;
+
 	/**
-	 * @var array An index of URLs relative to /wp-admin/. Any menus that match the index will be ignored.
+	 * @var array<string,true|string> An index of URLs relative to /wp-admin/. Any menus that match the index will be ignored.
 	 */
 	private $menu_url_blacklist = array();
 
@@ -100,11 +109,22 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 * @var ameModule[] List of modules that were loaded for the current request.
 	 */
 	private $loaded_modules = array();
+	private $are_modules_loaded = false;
+
+	const MODULE_STATE_LOADING = 1;
+	const MODULE_STATE_LOADED = 2;
+	private $module_load_state = array();
+	private $module_loader_recursion_depth = 0;
 
 	/**
 	 * @var array List of capabilities that are used in the default admin menu. Used to detect meta capabilities.
 	 */
 	private $caps_used_in_menu = array();
+
+	/**
+	 * @var bool Tue if the last displayed custom menu had more than two levels.
+	 */
+	private $custom_menu_is_deep = false;
 
 	public $is_access_test = false;
 	private $test_menu = null;
@@ -112,6 +132,36 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 * @var ameAccessTestRunner|null
 	 */
 	private $access_test_runner = null;
+
+	/**
+	 * @var Exception|null
+	 */
+	private $last_menu_exception = null;
+
+	private static $jquery_plugins = array(
+		//jQuery sort plugin
+		'jquery-sort'       => 'js/jquery.sort.js',
+		//qTip2 - jQuery tooltip plugin
+		'jquery-qtip'       => 'js/jquery.qtip.min.js',
+		//jQuery Form plugin. This is a more recent version than the one included with WP.
+		'ame-jquery-form'   => 'js/jquery.form.js',
+		//jQuery cookie plugin
+		'ame-jquery-cookie' => 'js/jquery.biscuit.js',
+	);
+	/**
+	 * @var array<string,ScriptDependency>
+	 */
+	private $jquery_plugin_instances = array();
+
+	/**
+	 * @var null|\YahnisElsts\AdminMenuEditor\WebpackRegistry\WebpackAssetRegistry
+	 */
+	private $webpack_registry = null;
+
+	/**
+	 * @var ameCustomizationFeatureToggle
+	 */
+	private $menu_structure_feature;
 
 	function init(){
 		$this->sitewide_options = true;
@@ -162,16 +212,35 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			//the current site but did not exist on the site where the user last edited the menu configuration.
 			'unused_item_position' => 'relative', //"relative" or "bottom".
 
-			//Permissions for menu items that are not part of the save menu configuration.
+			//Permissions for menu items that are not part of the saved menu configuration.
 			//The default is to leave the permissions unchanged.
 			'unused_item_permissions' => 'unchanged', //"unchanged" or "match_plugin_access".
 
 			//Verbosity level of menu permission errors.
 			'error_verbosity' => self::VERBOSITY_NORMAL,
 
+			//Enable/disable a series of size optimizations for the menu configuration.
+			//For historical reasons, this is called "compression" in some parts of the code,
+			//but it's closer to using a more space-efficient format.
+			'optimize_custom_menu_size' => true,
+
 			//Enable/disable menu configuration compression. Enabling it makes the DB row much smaller,
 			//but adds decompression overhead to very admin page.
 			'compress_custom_menu' => false,
+
+			//Automatically clean up data associated with missing roles and users. Only applies to some settings.
+			'delete_orphan_actor_settings' => !is_multisite(),
+
+			//Make custom menu and page titles translatable with WPML. They will appear in the "Strings" section.
+			//This only applies to custom (i.e. changed) titles.
+			'wpml_support_enabled' => true,
+			//Prevent bbPress from resetting its own roles. This should allow the user to edit bbPress roles
+			//with any role editing plugin. Disabled by default due to risk of conflicts and the performance impact.
+			'bbpress_override_enabled' => false,
+
+			//Experimental: Allow more than two levels of menus.
+			'deep_nesting_enabled' => null,
+			'was_nesting_ever_changed' => false,
 
 			//Which modules are active or inactive. Format: ['module-id' => true/false].
 			'is_active_module' => array(
@@ -199,7 +268,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		 *
 		 * We can't automatically detect menus like that. Here's why:
 		 * 1) Most plugins remove them too late, e.g. in admin_head. By that point, output has already started.
-		 *    We need the finalize the list of menu items and their permissions before that.
+		 *    We need to finalize the list of menu items and their permissions before that.
 		 * 2) It's hard to automatically determine *why* a menu item was removed. We can't distinguish between
 		 *    cosmetic changes like the hidden "welcome" items and people removing menus to deny access.
 		 */
@@ -213,6 +282,8 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			//BuddyPress 2.3.4
 			'index.php?page=bp-about' => true,
 			'index.php?page=bp-credits' => true,
+			//BuddyBoss 1.5.9
+			'admin.php?page=buddyboss-platform' => 'submenu',
 			//DW Question Answer 1.3.8.1
 			'index.php?page=dwqa-about' => true,
 			'index.php?page=dwqa-changelog' => true,
@@ -240,10 +311,94 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			'admin.php?page=WPCW_showPage_UserCourseAccess'        => true,
 			'admin.php?page=WPCW_showPage_UserProgess'             => true,
 			'admin.php?page=WPCW_showPage_UserProgess_quizAnswers' => true,
+			//Extended Widget Options
+			'index.php?page=extended-widget-opts-getting-started'  => true,
+			//Snax
+			'options-general.php?page=snax-pages-settings'            => true,
+			'options-general.php?page=snax-lists-settings'            => true,
+			'options-general.php?page=snax-quizzes-settings'          => true,
+			'options-general.php?page=snax-polls-settings'            => true,
+			'options-general.php?page=snax-stories-settings'          => true,
+			'options-general.php?page=snax-memes-settings'            => true,
+			'options-general.php?page=snax-audios-settings'           => true,
+			'options-general.php?page=snax-videos-settings'           => true,
+			'options-general.php?page=snax-images-settings'           => true,
+			'options-general.php?page=snax-galleries-settings'        => true,
+			'options-general.php?page=snax-embeds-settings'           => true,
+			'options-general.php?page=snax-voting-settings'           => true,
+			'options-general.php?page=snax-limits-settings'           => true,
+			'options-general.php?page=snax-auth-settings'             => true,
+			'options-general.php?page=snax-moderation-settings'       => true,
+			'options-general.php?page=snax-embedly-settings'          => true,
+			'options-general.php?page=snax-demo-settings'             => true,
+			'index.php?page=snax-about'                               => true,
+			'options-general.php?page=snax-collections-settings'      => true,
+			'options-general.php?page=snax-links-settings'            => true,
+			'options-general.php?page=snax-extproduct-settings'       => true,
+			'options-general.php?page=snax-slog-settings'             => true,
+			'options-general.php?page=snax-slog-networks-settings'    => true,
+			'options-general.php?page=snax-slog-locations-settings'   => true,
+			'options-general.php?page=snax-slog-log-settings'         => true,
+			'options-general.php?page=snax-slog-gdpr-settings'        => true,
+			'options-general.php?page=snax-shares-settings'           => true,
+			'options-general.php?page=snax-shares-positions-settings' => true,
+            //Media Ace
+			'options-general.php?page=mace-image-bulk-settings'          => true,
+			'options-general.php?page=mace-lazy_load-settings'           => true,
+			'options-general.php?page=mace-watermarks-settings'          => true,
+			'options-general.php?page=mace-hotlink-settings'             => true,
+			'options-general.php?page=mace-gif-settings'                 => true,
+			'options-general.php?page=mace-auto-featured-image-settings' => true,
+			'options-general.php?page=mace-expiry-settings'              => true,
+			'options-general.php?page=mace-video-settings'               => true,
+			'options-general.php?page=mace-gallery-settings'             => true,
+			'options-general.php?page=mace-general-settings'             => true,
+			//"What's Your Reaction"
+			'options-general.php?page=wyr-fakes-settings' => true,
+			//WP-Job-Manager 1.34.1
+			'index.php?page=job-manager-setup' => true,
+			//Simple Calendar 3.1.33
+			'index.php?page=simple-calendar_about'       => true,
+			'index.php?page=simple-calendar_credits'     => true,
+			'index.php?page=simple-calendar_translators' => true,
+			//Stripe For WooCommerce 3.2.12
+			'wc_stripe' => 'submenu',
+			//WP Grid Builder 1.5.9
+			'admin.php?page=wpgb-card-builder'   => true,
+			'admin.php?page=wpgb-grid-settings'  => true,
+			'admin.php?page=wpgb-facet-settings' => true,
+			//Google Analytics for WordPress by MonsterInsights 8.4.0
+			'index.php?page=monsterinsights-getting-started' => true,
+			//WPForms Lite 1.7.8 (and possibly the paid version)
+			'index.php?page=wpforms-getting-started' => true,
+			//WPFunnels 2.7.6
+			'admin.php?page=edit_funnel' => true,
+			'admin.php?page=email-builder' => true,
+			//Email Marketing Automation - Mail Mint 1.2.5
+			'admin.php?page=mint-mail-automation-editor' => true,
+			//Enable Media Replace 4.1.5
+			'upload.php?page=enable-media-replace/enable-media-replace.php' => true,
+			//Elementor 3.26.4
+			'admin.php?page=elementor-connect' => true,
+			//Elementor Pro (based on user reports, not verified)
+			'elementor-pro-notes-proxy'        => true,
+			//Post SMTP 3.1.3
+			'index.php?page=post-about'        => true,
+			'index.php?page=post-credits'      => true,
+			//Advanced Flat Rate Shipping For WooCommerce 4.4.0 (submitted by the developer)
+			'admin.php?page=afrsm-pro-get-started'       => true,
+			'admin.php?page=afrsm-pro-edit-shipping'     => true,
+			'admin.php?page=afrsm-wc-shipping-zones'     => true,
+			'admin.php?page=afrsm-pro-import-export'     => true,
+			'admin.php?page=afrsm-page-general-settings' => true,
+			'admin.php?page=afrsm-page-add-ons'          => true,
+			'admin.php?page=afrsm-pro-dashboard'         => true,
+			'admin.php?page=dots_store'                  => 'submenu',
+			//WooCommerce Product Options 2.6.2
+			'admin.php?page=woocommerce-product-options-setup-wizard'  => true,
+			//WooCommerce Quantity Manager 2.4.3
+			'admin.php?page=woocommerce-quantity-manager-setup-wizard' => true,
 		);
-
-		//AJAXify screen options
-		add_action('wp_ajax_ws_ame_save_screen_options', array($this,'ajax_save_screen_options'));
 
 		//AJAXify hints and warnings
 		add_action('wp_ajax_ws_ame_hide_hint', array($this, 'ajax_hide_hint'));
@@ -262,7 +417,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		//to the request vars even if this PHP misfeature is disabled.
 		$this->capture_request_vars();
 
-		add_action('admin_enqueue_scripts', array($this, 'enqueue_menu_fix_script'));
+		add_action('admin_enqueue_scripts', array($this, 'enqueue_menu_fix_script'), 8);
 
 		//Enqueue miscellaneous helper scripts and styles.
 		add_action('admin_enqueue_scripts', array($this, 'enqueue_helper_scripts'));
@@ -280,16 +435,33 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		//Reset plugin access if the only allowed user gets deleted or their ID changes.
 		add_action('wp_login', array($this, 'maybe_reset_plugin_access'), 10, 2);
 
-		//Workaround for buggy plugins that unintentionally remove user roles.
-		/** @see WPMenuEditor::get_user_roles */
-		add_action('set_current_user', array($this, 'update_current_user_cache'), 1, 0); //Run before most plugins.
-		add_action('updated_user_meta', array($this, 'clear_user_role_cache'), 10, 2);
-		add_action('deleted_user_meta', array($this, 'clear_user_role_cache'), 10, 2);
+		//Grant virtual capabilities like "super_user" to users.
+		add_filter('user_has_cap', array($this, 'grant_virtual_caps_to_user'), 9, 3);
+		add_filter('user_has_cap', array($this, 'regrant_virtual_caps_to_user'), 200, 1);
+		add_filter('map_meta_cap', array($this, 'identity_map_meta_cap_for_user'), 200, 3);
+
+		//Update caches when the current user changes.
+		add_action('set_current_user', array($this, 'update_current_user_cache'), 2, 0); //Run before most plugins.
+		//Clear or refresh per-user caches when the user's roles or capabilities change.
+		add_action('updated_user_meta', array($this, 'on_user_metadata_changed'), 10, 3);
+		add_action('deleted_user_meta', array($this, 'on_user_metadata_changed'), 10, 3);
 		//There's also a "set_user_role" hook, but it's only called by WP_User::set_role and not WP_User::add_role.
 		//It's also redundant - WP_User::set_role updates user meta, so the above hooks already cover it.
 
 		//Multisite: Clear role and capability caches when switching to another site.
 		add_action('switch_blog', array($this, 'clear_site_specific_caches'), 10, 0);
+
+		$this->menu_structure_feature = new ameCustomizationFeatureToggle(
+			self::ADMIN_MENU_STRUCTURE_COMPONENT,
+			$this,
+			'editor',
+			function () {
+				return [
+					__('You will still see the default admin menu content.', 'admin-menu-editor'),
+					__('Custom admin menu is disabled for your account.', 'admin-menu-editor'),
+				];
+			}
+		);
 
 		//"Test Access" feature.
 		if ( (defined('DOING_AJAX') && DOING_AJAX) || isset($this->get['ame-test-menu-access-as']) ) {
@@ -317,6 +489,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			$this->import_settings();
 			$should_save_options = true;
 		}
+		$this->zlib_compression = $this->options['compress_custom_menu'];
 
 		//Track first install time.
         if ( !isset($this->options['first_install_time']) ) {
@@ -337,7 +510,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 				$this->save_options();
 			} else {
 				//Yes, this method can actually run before WP updates the list of active plugins. That means functions
-				//like is_plugin_active_for_network() will return false. As as result, we can't determine whether
+				//like is_plugin_active_for_network() will return false. As a result, we can't determine whether
 				//the plugin has been network-activated yet, so lets skip setting up the default config until
 				//the next page load.
 			}
@@ -348,6 +521,15 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			add_action('admin_notices', array($this, 'display_security_log'));
 		}
 
+		//Compatibility fix for MailPoet 3.
+		$this->apply_mailpoet_compat_fix();
+
+		//bbPress role override.
+		if ( !empty($this->options['bbpress_override_enabled']) ) {
+			require_once __DIR__ . '/bbpress-role-override.php';
+			new ameBBPressRoleOverride();
+		}
+
 		if ( did_action('plugins_loaded') ) {
 			$this->load_modules();
 		} else {
@@ -356,25 +538,49 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	}
 
 	public function load_modules() {
-		//Modules
-		foreach($this->get_active_modules() as $module) {
-			/** @noinspection PhpIncludeInspection */
-			include ($module['path']);
+		$this->module_loader_recursion_depth++;
+
+		//Load any active modules that haven't been loaded yet.
+		foreach($this->get_active_modules() as $id => $module) {
+			//Skip modules that are already loaded or are in the process of being loaded.
+			if (
+				array_key_exists($id, $this->loaded_modules)
+				|| !empty($this->module_load_state[$id])
+			) {
+				continue;
+			}
+
+			$this->module_load_state[$id] = self::MODULE_STATE_LOADING;
+
+			if ( !empty($module['path']) ) {
+				include($module['path']);
+			}
 			if ( !empty($module['className']) ) {
 				$instance = new $module['className']($this);
-				$this->loaded_modules[] = $instance;
+				$this->loaded_modules[$id] = $instance;
+			} else {
+				$this->loaded_modules[$id] = true;
 			}
+
+			$this->module_load_state[$id] = self::MODULE_STATE_LOADED;
 		}
 
-		//Set up the tabs for the menu editor page. Many tabs are provided by modules.
-		$firstTabs = array('editor' => 'Admin Menu');
-		if ( is_network_admin() ) {
-			//TODO: This could be in extras.php
-			$firstTabs = array('network-admin-menu' => 'Network Admin Menu');
+		//This final setup step should only run once, after all modules have been loaded.
+		if ( $this->module_loader_recursion_depth === 1 ) {
+			$this->are_modules_loaded = true;
+
+			//Set up the tabs for the menu editor page. Many tabs are provided by modules.
+			$firstTabs = array('editor' => 'Admin Menu');
+			if ( is_network_admin() ) {
+				//TODO: This could be in extras.php
+				$firstTabs = array('network-admin-menu' => 'Network Admin Menu');
+			}
+			$this->tabs = apply_filters('admin_menu_editor-tabs', $firstTabs);
+			//The "Settings" tab is always last.
+			$this->tabs['settings'] = 'Settings';
 		}
-		$this->tabs = apply_filters('admin_menu_editor-tabs', $firstTabs);
-		//The "Settings" tab is always last.
-		$this->tabs['settings'] = 'Settings';
+
+		$this->module_loader_recursion_depth--;
 	}
 
 	/**
@@ -420,12 +626,6 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			return;
 		}
 
-		//Menu reset (for emergencies). Executed by accessing http://example.com/wp-admin/?reset_admin_menu=1
-		$reset_requested = isset($this->get['reset_admin_menu']) && $this->get['reset_admin_menu'];
-		if ( $reset_requested && $this->current_user_can_edit_menu() ){
-			$this->set_custom_menu(null);
-		}
-
 		//The menu editor is only visible to users with the manage_options privilege.
 		//Or, if the plugin is installed in mu-plugins, only to the site administrator(s).
 		if ( $this->current_user_can_edit_menu() ){
@@ -453,8 +653,18 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			add_action("admin_print_scripts-$page", array($this, 'enqueue_scripts'), 1);
 			add_action("admin_print_styles-$page", array($this, 'enqueue_styles'));
 
-			//Make sure Lodash doesn't conflict with the copy of Underscore that's bundled with WordPress.
-			add_filter('script_loader_tag', array($this, 'lodash_noconflict'), 10, 2); //Filter exists since WP 4.1.
+			//A special CSS class lets us conditionally style the menu item and its siblings.
+			ameMenuItem::add_class_to_submenu_item(
+				$parent_slug,
+				'menu_editor',
+				'ws-ame-primary-am-item'
+			);
+
+			//Let modules do something when loading a specific tab but before output starts.
+			add_action('load-' . $page, array($this, 'trigger_tab_load_event'));
+
+			//Notify modules that the menu item has been registered.
+			do_action('admin_menu_editor-editor_menu_registered');
 
 			//Compatibility fix for All In One Event Calendar; see the callback for details.
 			add_action("admin_print_scripts-$page", array($this, 'dequeue_ai1ec_scripts'));
@@ -464,15 +674,6 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 			//Experimental compatibility fix for Ultimate TinyMCE
 			add_action("admin_print_scripts-$page", array($this, 'remove_ultimate_tinymce_qtags'));
-
-			//Make a placeholder for our screen options (hacky)
-			$screen_hook_name = $page;
-			if ( is_network_admin() ) {
-				$screen_hook_name .= '-network';
-			}
-			if ( $this->current_tab === 'editor' ) {
-				add_meta_box("ws-ame-screen-options", "[AME placeholder]", '__return_false', $screen_hook_name);
-			}
 		}
 
 		//Compatibility fix for the WooCommerce order count bubble. Must be run before storing or processing $submenu.
@@ -500,7 +701,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		$this->item_templates = $templateBuilder->build(
 			$this->default_wp_menu,
 			$this->default_wp_submenu,
-			$this->menu_url_blacklist
+			$this->get_menu_url_black_list()
 		);
 
 		//Store the default order for later. It will be used when (re)inserting unused items into the menu.
@@ -512,18 +713,28 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 		//Is there a custom menu to use?
 		$custom_menu = $this->load_custom_menu();
-		if ( $custom_menu !== null ){
+		$has_custom_menu = ($custom_menu !== null) && !empty($custom_menu['tree']);
+		if ( $has_custom_menu ) {
 			//Merge in data from the default menu
 			$custom_menu['tree'] = $this->menu_merge($custom_menu['tree']);
 
 			//Save the merged menu for later - the editor page will need it
 			$this->merged_custom_menu = $custom_menu;
 
+			do_action('admin_menu_editor-menu_merged', $this->merged_custom_menu);
+		}
+
+		if (
+			$has_custom_menu
+			&& !$this->menu_structure_feature->isCustomizationDisabled()
+		) {
 			//Convert our custom menu to the $menu + $submenu structure used by WP.
-			//Note: This method sets up multiple internal fields and may cause side-effects.
+			//Note: This method sets up multiple internal fields and may cause side effects.
 			$this->user_cap_cache_enabled = true;
 			$this->build_custom_wp_menu($this->merged_custom_menu['tree']);
 			$this->user_cap_cache_enabled = false;
+
+			do_action('admin_menu_editor-menu_built', $this->merged_custom_menu, $this);
 
 			if ( $this->is_access_test ) {
 				$this->access_test_runner['wasCustomMenuApplied'] = true;
@@ -555,6 +766,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 					$message .= $this->get_formatted_security_log();
 				}
 				do_action('admin_page_access_denied');
+				// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- HTML should already be escaped as necessary.
 				wp_die($message);
 			} else {
 				$this->log_security_note('ALLOW access.');
@@ -565,9 +777,23 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			}
 
 			//Replace the admin menu just before it is displayed and restore it afterwards.
-			//The fact that replace_wp_menu() is attached to the 'parent_file' hook is incidental;
+			//The fact that replace_wp_menu() is attached to the 'submenu_file' hook is incidental;
 			//there just wasn't any other, more suitable hook available.
-			add_filter('parent_file', array($this, 'replace_wp_menu'));
+			$replacementFilter = 'submenu_file';
+			/* Compatibility workaround for UIPress 3.3.100.
+			 *
+			 * UIPress also replaces the admin menu, but it does so using the 'parent_file' filter
+			 * (conditionally, requires at least one active UIPress template, etc). If we want our
+			 * menu settings to be applied, we need to replace the admin menu *before* UIPress does.
+			 * So let's use the 'parent_file' filter when UIPress is active.
+			 */
+			if (
+				(defined('uip_plugin_path_name') && (uip_plugin_path_name === 'uipress-lite'))
+				|| $this->is_plugin_active('uipress/uipress.php')
+			) {
+				$replacementFilter = 'parent_file';
+			}
+			add_filter($replacementFilter, array($this, 'replace_wp_menu'), 1001);
 			add_action('adminmenu', array($this, 'restore_wp_menu'));
 
 			//A compatibility hack for Ozh's Admin Drop Down Menu. Make sure it also sees the modified menu.
@@ -579,29 +805,60 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		} else {
 			do_action('admin_menu_editor-menu_replacement_skipped');
 		}
+
+		add_action(
+			'admin_menu_editor-register_hideable_items',
+			array($this, 'register_hideable_items'),
+			10,
+			1
+		);
+
+		add_filter(
+			'admin_menu_editor-save_hideable_items-admin-menu',
+			array($this, 'save_hideable_items'),
+			10,
+			2
+		);
+	}
+
+	private $is_menu_url_blacklist_filtered = false;
+
+	private function get_menu_url_black_list() {
+		if ( !$this->is_menu_url_blacklist_filtered ) {
+			$this->is_menu_url_blacklist_filtered = true; //Set early in case or unexpected recursion.
+
+			//Let other plugins add their own blacklisted URLs.
+			$this->menu_url_blacklist = apply_filters(
+				'admin_menu_editor-menu_url_blacklist',
+				$this->menu_url_blacklist
+			);
+		}
+		return $this->menu_url_blacklist;
 	}
 
 	/**
 	 * Replace the current WP menu with our custom one.
 	 *
-	 * @param string $parent_file Ignored. Required because this method is a hook for the 'parent_file' filter.
-	 * @return string Returns the $parent_file argument.
+	 * @param string $submenu_file Unused. Required because this method is a hook for the 'submenu_file' filter.
+	 * @return string Returns the $submenu_file argument.
 	 */
-	public function replace_wp_menu($parent_file = '') {
+	public function replace_wp_menu($submenu_file = '') {
 		global $menu, $submenu;
 
 		$this->old_wp_menu = $menu;
 		$this->old_wp_submenu = $submenu;
 
+		// phpcs:disable WordPress.WP.GlobalVariablesOverride.Prohibited -- Overriding menus is the whole point of this plugin.
 		$menu = $this->custom_wp_menu;
 		$submenu = $this->custom_wp_submenu;
+		// phpcs:enable
 
 		$this->user_cap_cache_enabled = true;
-		list($menu, $submenu) = $this->filter_menu($menu, $submenu);
+		$this->filter_global_menu();
 		$this->user_cap_cache_enabled = false;
 
 		do_action('admin_menu_editor-menu_replaced');
-		return $parent_file;
+		return $submenu_file;
 	}
 
 	/**
@@ -610,9 +867,11 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 * @return void
 	 */
 	public function restore_wp_menu() {
+		// phpcs:disable WordPress.WP.GlobalVariablesOverride.Prohibited
 		global $menu, $submenu;
 		$menu = $this->old_wp_menu;
 		$submenu = $this->old_wp_submenu;
+		// phpcs:enable
 	}
 
 	/**
@@ -627,11 +886,14 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 *
 	 * - Adds position-dependent CSS classes.
 	 *
-	 * @param array $menu
-	 * @param array $submenu
-	 * @return array An array with two items - the filtered menu and submenu.
+	 * @global array $menu
+	 * @global array $submenu
+	 *
+	 * @return void
 	 */
-	private function filter_menu($menu, $submenu) {
+	private function filter_global_menu() {
+		// phpcs:disable WordPress.WP.GlobalVariablesOverride.Prohibited
+		global $menu, $submenu;
 		global $_wp_menu_nopriv; //Caution: Modifying this array could lead to unexpected consequences.
 
 		//Remove sub-menus which the user shouldn't be able to access,
@@ -640,6 +902,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			foreach ($items as $index => $data) {
 				if ( ! $this->current_user_can($data[1]) ) {
 					unset($submenu[$parent][$index]);
+					/** @noinspection PhpArrayUsedOnlyForWriteInspection -- It's a global variable used by WP. */
 					$_wp_submenu_nopriv[$parent][$data[2]] = true;
 				} else {
 					//The menu might be set to some kind of special capability that is only valid
@@ -724,8 +987,75 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 		//Add display-specific classes like "menu-top-first" and others.
 		$menu = add_menu_classes($menu);
+		// phpcs:enable
+	}
 
-		return array($menu, $submenu);
+	public function get_safe_js_libraries() {
+		static $libraries = null;
+		if ( $libraries !== null ) {
+			return $libraries;
+		}
+
+		//Knockout
+		$knockout = ScriptDependency::create(
+			plugins_url('js/knockout.js', $this->plugin_file),
+			'ame-knockout',
+			AME_ROOT_DIR . '/js/knockout.js'
+		);
+
+		$deps = [
+			$knockout,
+
+			//Unaliased Knockout library for back-compat; should not be used.
+			ScriptDependency::create(
+				$knockout->getUrl(),
+				'knockout',
+				$knockout->getAbsoluteFilePath()
+			),
+
+			//Lodash library
+			ScriptDependency::create(
+				plugins_url('js/lodash4.min.js', $this->plugin_file),
+				'ame-lodash',
+				AME_ROOT_DIR . '/js/lodash4.min.js'
+			)
+				//Make sure Lodash doesn't conflict with the copy of Underscore that's bundled with WordPress.
+				//Revert the "_" variable to its original value and store Lodash in "wsAmeLodash" instead.
+				->addInlineScript('window.wsAmeLodash = _.noConflict();'),
+
+			//Knockout bindings for the jQuery UI sortable functionality.
+			ScriptDependency::create(
+				plugins_url('js/knockout-sortable.js', $this->plugin_file),
+				'ame-knockout-sortable',
+				AME_ROOT_DIR . '/js/knockout-sortable.js'
+			)
+				->addDependencies(
+					$knockout, 'jquery', 'jquery-ui-sortable',
+					'jquery-ui-draggable', 'jquery-ui-droppable'
+				),
+
+			//Miscellaneous Knockout extensions.
+			ScriptDependency::create(
+				plugins_url('js/free-ko-extensions.js', $this->plugin_file),
+				'ame-free-ko-extensions',
+				AME_ROOT_DIR . '/js/free-ko-extensions.js'
+			)
+				->addDependencies($knockout),
+
+			//Mini utilities for more functional programming.
+			ScriptDependency::create(
+				plugins_url('js/mini-func.js', $this->plugin_file),
+				'ame-mini-functional-lib',
+				AME_ROOT_DIR . '/js/mini-func.js'
+			),
+		];
+
+		$libraries = [];
+		foreach ($deps as $instance) {
+			$libraries[$instance->getHandle()] = $instance;
+		}
+
+		return $libraries;
 	}
 
 	public function register_base_dependencies() {
@@ -735,90 +1065,157 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		}
 		$done = true;
 
-		$this->register_jquery_plugins();
-
-		//Lodash library
-		wp_register_auto_versioned_script('ame-lodash', plugins_url('js/lodash.min.js', $this->plugin_file));
-
-		//Knockout
-		wp_register_auto_versioned_script('knockout', plugins_url('js/knockout.js', $this->plugin_file));
-
-		//Actor manager.
-		wp_register_auto_versioned_script(
-			'ame-actor-manager',
-			plugins_url('js/actor-manager.js', $this->plugin_file),
-			array('ame-lodash')
-		);
-
-		$roles = array();
-
-		$wp_roles = ameRoleUtils::get_roles();
-		foreach($wp_roles->roles as $role_id => $role) {
-			$role['capabilities'] = $this->castValuesToBool($role['capabilities']);
-			$roles[$role_id] = $role;
+		foreach($this->get_base_dependencies() as $dependency) {
+			$dependency->register();
 		}
 
-		//Known users.
-		$users = array();
-		$current_user = wp_get_current_user();
-		$logins_to_include = apply_filters('admin_menu_editor-users_to_load', array());
+		//Base styles.
+		wp_register_auto_versioned_style('menu-editor-base-style', plugins_url('css/menu-editor.css', $this->plugin_file));
 
-		//Always include the current user.
-		$logins_to_include[] = $current_user->get('user_login');
-		$logins_to_include = array_unique($logins_to_include);
-
-		//Load user details.
-		foreach($logins_to_include as $login) {
-			$user = get_user_by('login', $login);
-			if ( !empty($user) ) {
-				$users[$login] = $this->user_to_property_map($user);
-			}
+		if ( function_exists('ws_ame_register_customizable_js_lib') ) {
+			ws_ame_register_customizable_js_lib($this);
 		}
-
-		//Compatibility workaround: Get the real roles of the current user even if other plugins corrupt the list.
-		$users[$current_user->get('user_login')]['roles'] = array_values($this->get_user_roles($current_user));
-
-		$suspected_meta_caps = $this->detect_meta_caps($roles, $users);
-
-		//The current user has all of the meta caps. That's how we know they're meta caps and not just regular
-		//capabilities that simply haven't been granted to anyone.
-		$users[$current_user->get('user_login')]['meta_capabilities'] = $suspected_meta_caps;
-
-		//TODO: Include currentUserLogin
-		$actor_data = array(
-			'roles' => $roles,
-			'users' => $users,
-			'isMultisite' => is_multisite(),
-			'capPower' => $this->load_cap_power(),
-			'suspectedMetaCaps' => $suspected_meta_caps,
-		);
-		wp_localize_script('ame-actor-manager', 'wsAmeActorData', $actor_data);
-
-		//Modules
-		wp_register_auto_versioned_script(
-			'ame-access-editor',
-			plugins_url('modules/access-editor/access-editor.js', $this->plugin_file),
-			array('jquery', 'ame-lodash')
-		);
 
 		//Let extras register their scripts.
-		do_action('admin_menu_editor-register_scripts');
+		do_action('admin_menu_editor-register_scripts', $this);
+	}
+
+	/**
+	 * @return ameBaseScriptDependencies
+	 */
+	public function get_base_dependencies(): ameBaseScriptDependencies {
+		static $deps = null;
+		if ( $deps !== null ) {
+			return $deps;
+		}
+
+		$deps = array_merge(
+			$this->get_jquery_plugins(),
+			$this->get_safe_js_libraries()
+		);
+
+		//Access editor module.
+		$accessEditor = ScriptDependency::create(
+			plugins_url('modules/access-editor/access-editor.js', $this->plugin_file),
+			'ame-access-editor',
+			AME_ROOT_DIR . '/modules/access-editor/access-editor.js'
+		)
+			->addDependencies('jquery', $deps['ame-lodash']);
+		$deps[$accessEditor->getHandle()] = $accessEditor;
+
+		//Actor manager.
+		$actorManager = ScriptDependency::create(
+			plugins_url('js/actor-manager.js', $this->plugin_file),
+			'ame-actor-manager',
+			AME_ROOT_DIR . '/js/actor-manager.js'
+		)
+			->addDependencies($deps['ame-lodash']);
+		$deps[$actorManager->getHandle()] = $actorManager;
+
+		$actorManager->addLazyJsVariable(
+			'wsAmeActorData',
+			function () {
+				$roles = array();
+
+				$wp_roles = ameRoleUtils::get_roles();
+				foreach ($wp_roles->roles as $role_id => $role) {
+					//There is at least one plugin that creates a custom role without a "capabilities" key.
+					//We need to check for that to avoid an "undefined array key" warning.
+					if ( array_key_exists('capabilities', $role) ) {
+						//Some plugins use 1, 0, null, or other truthy/falsy values for capability settings.
+						//AME uses booleans. It helps avoid bugs and it's also what WordPress core does.
+						$role['capabilities'] = $this->castValuesToBool($role['capabilities']);
+					} else {
+						$role['capabilities'] = array();
+					}
+					$roles[$role_id] = $role;
+				}
+
+				//Known users.
+				$users = array();
+				$current_user = wp_get_current_user();
+				$logins_to_include = apply_filters('admin_menu_editor-users_to_load', array());
+
+				//Always include the current user.
+				$logins_to_include[] = $current_user->get('user_login');
+				$logins_to_include = array_unique($logins_to_include);
+
+				//Load user details.
+				foreach ($logins_to_include as $login) {
+					$user = get_user_by('login', $login);
+					if ( !empty($user) ) {
+						$users[$login] = $this->user_to_property_map($user);
+					}
+				}
+
+				//Compatibility workaround: Get the real roles of the current user even if other plugins corrupt the list.
+				$users[$current_user->get('user_login')]['roles'] = array_values($this->get_user_roles($current_user));
+
+				$suspected_meta_caps = $this->detect_meta_caps($roles, $users);
+
+				//The current user has all of the meta caps. That's how we know they're meta caps and not just regular
+				//capabilities that simply haven't been granted to anyone.
+				$users[$current_user->get('user_login')]['meta_capabilities'] = $suspected_meta_caps;
+
+				//TODO: Include currentUserLogin
+				return array(
+					'roles'             => $roles,
+					'users'             => $users,
+					'isMultisite'       => is_multisite(),
+					'capPower'          => $this->load_cap_power(),
+					'suspectedMetaCaps' => $suspected_meta_caps,
+				);
+			}
+		);
+
+		//Settings page utilities and fixes.
+		//This is a separate script because some of it has to run after common.js, which is loaded in the page footer.
+		$settingsPageUtils = ScriptDependency::create(
+			plugins_url('js/settings-page-utils.js', $this->plugin_file),
+			'ame-settings-page-utils',
+			AME_ROOT_DIR . '/js/settings-page-utils.js'
+		)
+			->addDependencies('jquery', $deps['ame-lodash'], 'common')
+			->setInFooter();
+		$deps[$settingsPageUtils->getHandle()] = $settingsPageUtils;
+
+		$deps = apply_filters('admin_menu_editor-base_scripts', $deps);
+		$deps = new ameBaseScriptDependencies($deps);
+
+		return $deps;
 	}
 
 	/**
 	 * @access private
+	 * @param string[]|null $handles
 	 */
-	public function register_jquery_plugins() {
-		//jQuery JSON plugin
-		wp_register_auto_versioned_script('jquery-json', plugins_url('js/jquery.json.js', $this->plugin_file), array('jquery'));
-		//jQuery sort plugin
-		wp_register_auto_versioned_script('jquery-sort', plugins_url('js/jquery.sort.js', $this->plugin_file), array('jquery'));
-		//qTip2 - jQuery tooltip plugin
-		wp_register_auto_versioned_script('jquery-qtip', plugins_url('js/jquery.qtip.min.js', $this->plugin_file), array('jquery'));
-		//jQuery Form plugin. This is a more recent version than the one included with WP.
-		wp_register_auto_versioned_script('ame-jquery-form', plugins_url('js/jquery.form.js', $this->plugin_file), array('jquery'));
-		//jQuery cookie plugin
-		wp_register_auto_versioned_script('jquery-cookie', plugins_url('js/jquery.biscuit.js', $this->plugin_file), array('jquery'));
+	public function register_jquery_plugins($handles = null) {
+		if ( $handles === null ) {
+			$handles = array_keys(self::$jquery_plugins);
+		}
+
+		$plugins = $this->get_jquery_plugins();
+		foreach ($handles as $handle) {
+			if ( isset($plugins[$handle]) ) {
+				$plugins[$handle]->register();
+			}
+		}
+	}
+
+	private function get_jquery_plugins() {
+		if ( empty($this->jquery_plugin_instances) && !empty(self::$jquery_plugins) ) {
+			foreach (self::$jquery_plugins as $handle => $relativePath) {
+				$dependency = ScriptDependency::create(
+					plugins_url($relativePath, $this->plugin_file),
+					$handle,
+					AME_ROOT_DIR . '/' . $relativePath
+				);
+				$dependency->addDependencies('jquery');
+
+				$this->jquery_plugin_instances[$handle] = $dependency;
+			}
+		}
+		return $this->jquery_plugin_instances;
 	}
 
 	/**
@@ -827,7 +1224,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 *
 	 * @param array $roles
 	 * @param array $users
-	 * @return array [capability => true]
+	 * @return array [capability => string[]]
 	 */
 	private function detect_meta_caps($roles, $users) {
 		if ( !$this->current_user_can_edit_menu() || !is_super_admin() ) {
@@ -835,10 +1232,10 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		}
 
 		//Any capability that's assigned to a role probably isn't a meta capability.
-		$allRealCaps = ameRoleUtils::get_all_capabilities();
+		$allRealCaps = ameRoleUtils::get_all_capabilities(true);
 		//Similarly, capabilities that are directly assigned to users are probably real.
 		foreach($users as $user) {
-			$allRealCaps = array_merge($allRealCaps, $user['capabilities']);
+			$allRealCaps = $allRealCaps + $user['capabilities'];
 		}
 		//Role IDs can also be used as capabilities.
 		foreach($roles as $roleId => $role) {
@@ -857,7 +1254,29 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		//that's probably a non-meta cap that isn't enabled for *anyone*.
 		$suspectedMetaCaps = array_filter(array_keys($suspectedMetaCaps), 'current_user_can');
 
-		return array_fill_keys($suspectedMetaCaps, true);
+		//Attempt to map meta caps to real capabilities.
+		$result = [];
+		$currentUserId = get_current_user_id();
+		foreach ($suspectedMetaCaps as $metaCap) {
+			$caps = map_meta_cap($metaCap, $currentUserId);
+			if ( is_array($caps) ) {
+				//Discard the "do_not_allow" cap and the meta cap itself (the latter matters
+				//for "view_site_health_checks" which is granted via a different filter).
+				$caps = array_filter($caps, function ($cap) use ($metaCap) {
+					return ($cap !== 'do_not_allow') && ($cap !== $metaCap);
+				});
+
+				//"view_site_health_checks" is essentially a meta cap, but it's granted via
+				//the "user_has_cap" filter, so it doesn't show up in the "map_meta_cap()" results.
+				/** @see wp_maybe_grant_site_health_caps() */
+				if ( empty($caps) && ($metaCap === 'view_site_health_checks') && !is_multisite() ) {
+					$caps = ['install_plugins'];
+				}
+				$result[$metaCap] = $caps;
+			}
+		}
+
+		return $result;
 	}
 
 	/**
@@ -931,20 +1350,15 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 		$this->register_base_dependencies();
 
-		//Move admin notices (e.g. "Settings saved") below editor tabs.
-		//This is a separate script because it has to run after common.js which is loaded in the page footer.
-		wp_enqueue_auto_versioned_script(
-			'ame-editor-tab-fix',
-			plugins_url('js/editor-tab-fix.js', $this->plugin_file),
-			array('jquery', 'common'),
-			true
-		);
+		//Settings page utilities.
+		//This is enqueued separately because some of it has to run in the footer, after common.js.
+		wp_enqueue_script('ame-settings-page-utils');
 
 		//Editor's scripts
 		$editor_dependencies = array(
 			'jquery', 'jquery-ui-sortable', 'jquery-ui-dialog', 'jquery-ui-tabs',
 			'ame-jquery-form', 'jquery-ui-droppable', 'jquery-qtip',
-			'jquery-sort', 'jquery-json', 'jquery-cookie',
+			'jquery-sort', 'ame-jquery-cookie',
 			'wp-color-picker', 'ame-lodash', 'ame-access-editor', 'ame-actor-manager',
 			'ame-actor-selector',
 		);
@@ -1001,11 +1415,10 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		$script_data = array(
 			'imagesUrl' => plugins_url('images', $this->plugin_file),
 			'adminAjaxUrl' => admin_url('admin-ajax.php'),
-			'hideAdvancedSettings' => (boolean)$this->options['hide_advanced_settings'],
+			'hideAdvancedSettings' => (bool)$this->options['hide_advanced_settings'],
 			'showExtraIcons' => true, //No longer used.
 			'submenuIconsEnabled' => $this->options['submenu_icons_enabled'],
 
-			'hideAdvancedSettingsNonce' => wp_create_nonce('ws_ame_save_screen_options'),
 			'dashiconsAvailable' => wp_style_is('dashicons', 'registered'),
 			'captionShowAdvanced' => 'Show advanced options',
 			'captionHideAdvanced' => 'Hide advanced options',
@@ -1033,6 +1446,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			'taxonomies' => $this->get_taxonomy_details(),
 
 			'showHints' => $this->get_hint_visibility(),
+			'hideHintNonce' => wp_create_nonce('ws_ame_hide_hint'),
 			'dashboardHidingConfirmationEnabled' => $this->options['dashboard_hiding_confirmation_enabled'],
 			'disableDashboardConfirmationNonce' => wp_create_nonce('ws_ame_disable_dashboard_hiding_confirmation'),
 
@@ -1043,6 +1457,12 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			'selectedSubmenu' => isset($this->get['selected_submenu_url']) ? strval($this->get['selected_submenu_url']) : null,
 			'expandSelectedMenu'    => isset($this->get['expand_menu']) && ($this->get['expand_menu'] === '1'),
 			'expandSelectedSubmenu' => isset($this->get['expand_submenu']) && ($this->get['expand_submenu'] === '1'),
+
+			'deepNestingEnabled' => $this->options['deep_nesting_enabled'],
+			'auxDataConfig' => apply_filters(
+				'admin_menu_editor-aux_data_config',
+				array('keys' => array('color_presets' => null), 'settingIdMap' => array(), 'prefixMap' => array())
+			),
 
 			'isDemoMode' => defined('IS_DEMO_MODE'),
 			'isMasterMode' => defined('IS_MASTER_MODE'),
@@ -1080,13 +1500,10 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 * less likely.
 	 */
 	public function move_editor_scripts_to_top() {
-		global $wp_scripts;
-		if ( !(isset($wp_scripts) && ($wp_scripts instanceof WP_Scripts)) ) {
-			$wp_scripts = new WP_Scripts();
-		}
+		$wp_scripts = wp_scripts(); //Requires WordPress 4.2.0+
 
 		//Sanity check. If the wp_scripts implementation has changed significantly, don't touch it.
-		if ( !isset($wp_scripts->queue) || (!is_array($wp_scripts->queue) || ($wp_scripts->queue instanceof Traversable)) ) {
+		if ( !isset($wp_scripts->queue) || !is_array($wp_scripts->queue) ) {
 			return;
 		}
 
@@ -1110,20 +1527,6 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 		//Insert the scripts after core script(s).
 		array_splice($wp_scripts->queue, $last_core_key + 1, 0, $handles_to_move);
-	}
-
-	/**
-	 * Revert the "_" variable to its original value and store Lodash in "wsAmeLodash" instead.
-	 *
-	 * @param string $tag
-	 * @param string $script_handle
-	 * @return string
-	 */
-	public function lodash_noconflict($tag, $script_handle) {
-		if ($script_handle === 'ame-lodash') {
-			$tag .= '<script type="text/javascript">wsAmeLodash = _.noConflict();</script>';
-		}
-		return $tag;
 	}
 
 	/**
@@ -1168,9 +1571,13 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	  * @return void
 	  */
 	function enqueue_styles(){
-		wp_enqueue_auto_versioned_style('jquery-qtip-syle', plugins_url('css/jquery.qtip.min.css', $this->plugin_file), array());
+		wp_enqueue_auto_versioned_style('jquery-qtip-syle', plugins_url('css/jquery.qtip.min.css', $this->plugin_file));
 
-		wp_register_auto_versioned_style('menu-editor-base-style', plugins_url('css/menu-editor.css', $this->plugin_file));
+		//Register 'menu-editor-base-style', which is a dependency of all colour schemes.
+		//We need this call here and not just in enqueue_scripts() because "admin_print_styles-$page"
+		//runs before "admin_print_scripts-$page".
+		$this->register_base_dependencies();
+
 		wp_register_auto_versioned_style(
 			'menu-editor-colours-classic',
 			plugins_url('css/style-classic.css', $this->plugin_file),
@@ -1210,24 +1617,30 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 *
 	 * @param array|null $custom_menu
 	 * @param string|null $config_id Supported values: 'network-admin', 'global' or 'site'
-	 * @throws InvalidMenuException
+	 * @return bool True if the database entry was updated, false if not.
 	 */
 	function set_custom_menu($custom_menu, $config_id = null) {
 		if ( $config_id === null ) {
 			$config_id = $this->guess_menu_config_id();
 		}
 
-		$custom_menu = apply_filters('ame_pre_set_custom_menu', $custom_menu);
+		$custom_menu = apply_filters('ame_pre_set_custom_menu', $custom_menu, $config_id);
 
 		$previous_custom_menu = $this->load_custom_menu($config_id);
-		$this->update_wpml_strings($previous_custom_menu, $custom_menu);
+		if ( !empty($this->options['wpml_support_enabled']) ) {
+			$this->update_wpml_strings($previous_custom_menu, $custom_menu);
+		}
 
 		if ( !empty($custom_menu) ) {
 			$custom_menu['prebuilt_virtual_caps'] = $this->build_virtual_capability_list($custom_menu);
-		}
 
-		if ( !empty($custom_menu) && $this->options['compress_custom_menu'] ) {
-			$custom_menu = ameMenu::compress($custom_menu);
+			if ( $this->options['optimize_custom_menu_size'] ) {
+				$custom_menu = ameMenu::compress($custom_menu);
+			}
+
+			if ( empty($custom_menu['format']) ) {
+				$custom_menu = ameMenu::add_format_header($custom_menu);
+			}
 		}
 
 		if ($config_id === 'site') {
@@ -1236,14 +1649,13 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 				$site_specific_options = array();
 			}
 			$site_specific_options['custom_menu'] = $custom_menu;
-			update_option($this->option_name, $site_specific_options);
+			$updated = update_option($this->option_name, $site_specific_options);
 		} else if ($config_id === 'global') {
 			$this->options['custom_menu'] = $custom_menu;
-			$this->save_options();
-
+			$updated = $this->save_options();
 		} else if ($config_id === 'network-admin' ) {
 			$this->options['custom_network_menu'] = $custom_menu;
-			$this->save_options();
+			$updated = $this->save_options();
 		} else {
 			throw new LogicException(sprintf('Invalid menu configuration ID: "%s"', $config_id));
 		}
@@ -1252,6 +1664,8 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		$this->cached_custom_menu = null;
 		$this->cached_virtual_caps = null;
 		$this->cached_user_caps = array();
+
+		return $updated;
 	}
 
 	/**
@@ -1259,7 +1673,6 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 *
 	 * @param null $config_id
 	 * @return array|null Either a menu in the internal format, or NULL if there is no custom menu available.
-	 * @throws InvalidMenuException
 	 */
 	public function load_custom_menu($config_id = null) {
 		if ( $config_id === null ) {
@@ -1270,30 +1683,59 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			return $this->cached_custom_menu;
 		}
 
+		//Modules can register custom hooks that change how menu settings are loaded, so we need to load active modules
+		//before we load the menu configuration. Usually that happens automatically, but there are some plugins that
+		//trigger AME filters that need menu data before modules would normally be loaded.
+		if ( !$this->are_modules_loaded ) {
+			$this->load_modules();
+		}
+
 		$this->loaded_menu_config_id = $config_id;
 
 		if ( $this->is_access_test ) {
 			return $this->test_menu;
 		}
 
-		if ( $config_id === 'network-admin' ) {
-			if ( empty($this->options['custom_network_menu']) ) {
-				return null;
+		try {
+			if ( $config_id === 'network-admin' ) {
+				if ( empty($this->options['custom_network_menu']) ) {
+					return null;
+				}
+				$this->cached_custom_menu = ameMenu::load_array($this->options['custom_network_menu']);
+			} else if ( $config_id === 'site' ) {
+				$site_specific_options = get_option($this->option_name, null);
+				if ( is_array($site_specific_options) && isset($site_specific_options['custom_menu']) ) {
+					$this->cached_custom_menu = ameMenu::load_array($site_specific_options['custom_menu']);
+				}
+			} else {
+				if ( empty($this->options['custom_menu']) ) {
+					return null;
+				}
+				$this->cached_custom_menu = ameMenu::load_array($this->options['custom_menu']);
 			}
-			$this->cached_custom_menu = ameMenu::load_array($this->options['custom_network_menu']);
-		} else if ( $config_id === 'site' ) {
-			$site_specific_options = get_option($this->option_name, null);
-			if ( is_array($site_specific_options) && isset($site_specific_options['custom_menu']) ) {
-				$this->cached_custom_menu = ameMenu::load_array($site_specific_options['custom_menu']);
+		} catch (InvalidMenuException $exception) {
+			if ( is_admin() && is_user_logged_in() && !did_action('all_admin_notices') ) {
+				add_action('all_admin_notices', array($this, 'show_config_corruption_error'));
+				$this->last_menu_exception = $exception;
 			}
-		} else {
-			if ( empty($this->options['custom_menu']) ) {
-				return null;
-			}
-			$this->cached_custom_menu = ameMenu::load_array($this->options['custom_menu']);
+			return null;
 		}
 
 		return $this->cached_custom_menu;
+	}
+
+	/**
+	 * Display a notice about the exception that was thrown when loading the menu configuration.
+	 */
+	public function show_config_corruption_error() {
+		if ( !$this->current_user_can_edit_menu() || is_null($this->last_menu_exception) ) {
+			return;
+		}
+		printf(
+			'<div class="notice notice-error"><p>%s</p></div>',
+			'<strong>Admin Menu Editor encountered an error while trying to load the menu configuration!</strong><br> '
+			. esc_html($this->last_menu_exception->getMessage())
+		);
 	}
 
 	private function guess_menu_config_id() {
@@ -1355,6 +1797,28 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	}
 
 	/**
+	 * Determine if a specific user can access the menu editor.
+	 *
+	 * @param int $userId
+	 * @return bool
+	 */
+	public function user_can_edit_menu($userId) {
+		$access = $this->options['plugin_access'];
+		if ( $access === 'super_admin' ) {
+			return is_super_admin($userId);
+		} else if ( $access === 'specific_user' ) {
+			return $userId == $this->options['allowed_user_id'];
+		} else {
+			$capability = apply_filters('admin_menu_editor-capability', $access);
+			$user = get_user_by('id', $userId);
+			if ( !$user ) {
+				return false;
+			}
+			return $user->has_cap($capability);
+		}
+	}
+
+	/**
 	 * Reset plugin access if the only allowed user no longer exists.
 	 *
 	 * Some people use security plugins like iThemes Security to replace the default admin account
@@ -1398,6 +1862,8 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 * @param string $admin_title The current admin title (full).
 	 * @param string $title The current page title.
 	 * @return string New admin title.
+	 *
+	 * @noinspection PhpUnused -- The parent class automatically sets up hooks for all "hook_" methods.
 	 */
 	function hook_admin_title($admin_title, $title){
 		$item = $this->get_current_menu_item();
@@ -1423,7 +1889,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			&& ($item['menu_title'] !== $default_menu_title)
 			&& (($default_menu_title === $default_title) || ($default_title === ''))
 		) {
-			$custom_title = strip_tags($item['menu_title']);
+			$custom_title = wp_strip_all_tags($item['menu_title']);
 		}
 
 		if ( isset($custom_title) ) {
@@ -1549,49 +2015,21 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 				}
 			}
 
-			if (is_array($topmenu['items'])) {
+			if (!empty($topmenu['items'])) {
 				//Iterate over submenu items
-				foreach ($topmenu['items'] as &$item){
-					if ( !ameMenuItem::get($item, 'custom') ) {
-						$template_id = ameMenuItem::template_id($item);
-
-						//Is this item present in the default WP menu?
-						if (isset($this->item_templates[$template_id])){
-							//Yes, load defaults from that item
-							$item['defaults'] = $this->item_templates[$template_id]['defaults'];
-							$this->item_templates[$template_id]['used'] = true;
-							//Add valid, non-custom items to the position index.
-							$positions_by_template[$template_id] = ameMenuItem::get($item, 'position', 0);
-							//We must move orphaned items elsewhere. Use the default location if possible.
-							if ( isset($topmenu['missing']) && $topmenu['missing'] ) {
-								$orphans[] = $item;
-							}
-						} else if ( empty($item['separator']) ) {
-							//Record as missing, unless it's a menu separator
-							$item['missing'] = true;
-
-							$temp = ameMenuItem::apply_defaults($item);
-							$temp = $this->set_final_menu_capability($temp);
-							$this->add_access_lookup($temp, 'submenu', true);
-                        }
-					} else {
-						//What if the parent of this custom item is missing?
-						//Right now the custom item will just disappear.
-					}
-				}
+				$this->merge_children($topmenu, $positions_by_template, $orphans);
 			}
 		}
 
 		//If we don't unset these they will fuck up the next two loops where the same names are used.
 		unset($topmenu);
-		unset($item);
 
 		//Now we have some items marked as missing, and some items in lookup arrays
 		//that are not marked as used. Lets remove the missing items from the tree.
 		$tree = ameMenu::remove_missing_items($tree);
 		//TODO: What would happen if we kept missing items?
 
-		//Lets merge in the unused items.
+		//Let's merge in the unused items.
 		$max_menu_position = !empty($positions_by_template) ? max($positions_by_template) : 100;
 		$new_grant_access = $this->get_new_menu_grant_access();
 		foreach ($this->item_templates as $template_id => $template){
@@ -1606,7 +2044,13 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			$entry['defaults'] = $template['defaults'];
 			$entry['unused'] = true; //Note that this item is unused
 
-			$entry['grant_access'] = $new_grant_access;
+			//Set new item permissions.
+			//Exception: The top-level "Profile" menu that only exists for non-admin users shouldn't be
+			//hidden. It gets flagged as new/unused because it doesn't exist for admin users (they have
+			//"Users -> Profile" instead).
+			if ( $template_id !== '>profile.php' ) {
+				$entry['grant_access'] = $new_grant_access;
+			}
 
 			if ($this->options['unused_item_position'] === 'relative') {
 
@@ -1661,7 +2105,8 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 		//Move orphaned items back to their original parents.
 		foreach($orphans as $item) {
-			$defaultParent = $item['defaults']['parent'];
+			//Apparently, 'parent' might not exist in some configurations. Unknown why.
+			$defaultParent = isset($item['defaults']['parent']) ? $item['defaults']['parent'] : null;
 			if ( isset($defaultParent) && isset($tree[$defaultParent]) ) {
 				$tree[$defaultParent]['items'][] = $item;
 			} else {
@@ -1678,6 +2123,50 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		$this->relative_template_order = null;
 
 		return $tree;
+	}
+
+	/**
+	 * Merge the children of a menu item with the default values from the WordPress menu.
+	 * This section was extracted to a method just to make it possible to call it recursively.
+	 *
+	 * @param array $menu
+	 * @param array $positions_by_template
+	 * @param array $orphans
+	 */
+	private function merge_children(&$menu, &$positions_by_template, &$orphans) {
+		foreach ($menu['items'] as &$item){
+			if ( !ameMenuItem::get($item, 'custom') ) {
+				$template_id = ameMenuItem::template_id($item);
+
+				//Is this item present in the default WP menu?
+				if (isset($this->item_templates[$template_id])){
+					//Yes, load defaults from that item
+					$item['defaults'] = $this->item_templates[$template_id]['defaults'];
+					$this->item_templates[$template_id]['used'] = true;
+					//Add valid, non-custom items to the position index.
+					$positions_by_template[$template_id] = ameMenuItem::get($item, 'position', 0);
+					//We must move orphaned items elsewhere. Use the default location if possible.
+					if ( isset($menu['missing']) && $menu['missing'] ) {
+						$orphans[] = $item;
+					}
+				} else if ( empty($item['separator']) ) {
+					//Record as missing, unless it's a menu separator
+					$item['missing'] = true;
+
+					$temp = ameMenuItem::apply_defaults($item);
+					$temp = $this->set_final_menu_capability($temp);
+					$this->add_access_lookup($temp, 'submenu', true);
+				}
+			} else {
+				//What if the parent of this custom item is missing?
+				//Right now the custom item will just disappear.
+			}
+
+			if ( !empty($item['items']) ) {
+				//Recursively merge children of submenu items.
+				$this->merge_children($item, $positions_by_template, $orphans);
+			}
+		}
 	}
 
 	/**
@@ -1748,7 +2237,6 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
    * @uses WPMenuEditor::$custom_wp_menu Stores the generated top-level menu here.
    * @uses WPMenuEditor::$custom_wp_submenu Stores the generated sub-menu here.
    *
-   * @uses WPMenuEditor::$title_lookups Generates a lookup list of page titles.
    * @uses WPMenuEditor::$reverse_item_lookup Generates a lookup list of url => menu item relationships.
    *
    * @param array $tree The new menu, in the internal tree format.
@@ -1758,7 +2246,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		$new_tree = array();
 		$new_menu = array();
 		$new_submenu = array();
-		$this->title_lookups = array();
+		$this->custom_menu_is_deep = false;
 
 		//Prepare the top menu
 		$first_nonseparator_found = false;
@@ -1774,28 +2262,8 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 			$topmenu = $this->prepare_for_output($topmenu, 'menu');
 
-			if ( empty($topmenu['separator']) ) {
-				$this->title_lookups[$topmenu['file']] = !empty($topmenu['page_title']) ? $topmenu['page_title'] : $topmenu['menu_title'];
-			}
-
 			//Prepare the submenu of this menu
-			$new_items = array();
-			if( !empty($topmenu['items']) ){
-				$items = $topmenu['items'];
-
-				foreach ($items as $item) {
-					$item = $this->prepare_for_output($item, 'submenu', $topmenu);
-					$new_items[] = $item;
-
-					//Make a note of the page's correct title so we can fix it later if necessary.
-					$this->title_lookups[$item['file']] = !empty($item['page_title']) ? $item['page_title'] : $item['menu_title'];
-				}
-
-				//Sort by position
-				usort($new_items, 'ameMenuItem::compare_position');
-			}
-
-			$topmenu['items'] = $new_items;
+			$topmenu['items'] = $this->prepare_children_for_output($topmenu);
 			$new_tree[] = $topmenu;
 		}
 
@@ -1814,70 +2282,177 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 		//Convert the prepared tree to the internal WordPress format.
 		foreach($new_tree as $topmenu) {
-			$trueAccess = isset($this->page_access_lookup[$topmenu['url']]) ? $this->page_access_lookup[$topmenu['url']] : null;
-			if ( ($trueAccess === 'do_not_allow') && ($topmenu['access_level'] !== $trueAccess) ) {
-				$topmenu['access_level'] = $trueAccess;
-				if ( isset($topmenu['access_check_log']) ) {
-					$topmenu['access_check_log'][] = sprintf(
-						'+ Override: There is a hidden menu item with the same URL (%1$s) but a higher priority.' .
-						' Setting the capability to "%2$s".',
-						$topmenu['url'],
-						$trueAccess
-					);
-					$topmenu['access_check_log'][] = str_repeat('=', 79);
-				}
-			}
-
-			if ( !isset($this->reverse_item_lookup[$topmenu['url']]) ) { //Prefer sub-menus.
-				$this->reverse_item_lookup[$topmenu['url']] = $topmenu;
-			}
-
-			$has_submenu_icons = false;
-			foreach($topmenu['items'] as $item) {
-				$trueAccess = isset($this->page_access_lookup[$item['url']]) ? $this->page_access_lookup[$item['url']] : null;
-				if ( ($trueAccess === 'do_not_allow') && ($item['access_level'] !== $trueAccess) ) {
-					$item['access_level'] = $trueAccess;
-					if ( isset($item['access_check_log']) ) {
-						$item['access_check_log'][] = sprintf(
-							'+ Override: There is a hidden menu item with the same URL (%1$s) but a higher priority.' .
-							' Setting the capability to "%2$s".',
-							$item['url'],
-							$trueAccess
-						);
-						$item['access_check_log'][] = str_repeat('=', 79);
-					}
-				}
-
-				$this->reverse_item_lookup[$item['url']] = $item;
-
-				//Skip missing and hidden items
-				if ( !empty($item['missing']) || !empty($item['hidden']) ) {
-					continue;
-				}
-
-				//Keep track of which menus have items with icons. Ignore hidden items.
-				$has_submenu_icons = $has_submenu_icons
-					|| (!empty($item['has_submenu_icon']) && $item['access_level'] !== 'do_not_allow');
-
-				$new_submenu[$topmenu['file']][] = $this->convert_to_wp_format($item);
-			}
-
-			//Skip missing and hidden menus.
-			if ( !empty($topmenu['missing']) || !empty($topmenu['hidden']) ) {
-				continue;
-			}
-
-			//The ame-has-submenu-icons class lets us change the appearance of all submenu items at once,
-			//without having to add classes/styles to each item individually.
-			if ( $has_submenu_icons && (strpos($topmenu['css_class'], 'ame-has-submenu-icons') === false) )  {
-				$topmenu['css_class'] .= ' ame-has-submenu-icons';
-			}
-
-			$new_menu[] = $this->convert_to_wp_format($topmenu);
+			$this->build_top_level_item($topmenu, $new_menu, $new_submenu);
 		}
 
 		$this->custom_wp_menu = $new_menu;
 		$this->custom_wp_submenu = $new_submenu;
+	}
+
+	/**
+	 * Prepare all the children (i.e. submenu items) of a menu for output.
+	 *
+	 * @param array $menu A menu item.
+	 * @param null|bool $is_deep
+	 * @return array
+	 */
+	private function prepare_children_for_output($menu, $is_deep = null) {
+		if ( empty($menu['items']) ) {
+			return array();
+		}
+
+		$new_items = array();
+
+		foreach ($menu['items'] as $item) {
+			$item = $this->prepare_for_output($item, 'submenu', $menu, ($is_deep === true));
+
+			if ( !empty($item['items']) ) {
+				$item['items'] = $this->prepare_children_for_output($item, true);
+			}
+
+			$new_items[] = $item;
+		}
+
+		//Sort by position
+		usort($new_items, 'ameMenuItem::compare_position');
+
+		return $new_items;
+	}
+
+	/**
+	 * Convert one top level menu and all of its submenu items to the WP menu format.
+	 *
+	 * @param array $topmenu A menu item.
+	 * @param array $menu Top level menu list. The converted item will be added to this list.
+	 * @param array $submenu Submenu list. The converted submenus (if any) will be added to this list.
+	 */
+	private function build_top_level_item($topmenu, &$menu, &$submenu) {
+		$trueAccess = isset($this->page_access_lookup[$topmenu['url']]) ? $this->page_access_lookup[$topmenu['url']] : null;
+		if ( ($trueAccess === 'do_not_allow') && ($topmenu['access_level'] !== $trueAccess) ) {
+			$topmenu['access_level'] = $trueAccess;
+			$reason = sprintf(
+				'There is a hidden menu item with the same URL (%1$s) but a higher priority.',
+				$topmenu['url']
+			);
+			$item['access_decision_reason'] = $reason;
+
+			if ( isset($topmenu['access_check_log']) ) {
+				$topmenu['access_check_log'][] = sprintf(
+					'+ Override: %1$s Setting the capability to "%2$s".',
+					$reason,
+					$trueAccess
+				);
+				$topmenu['access_check_log'][] = str_repeat('=', 79);
+			}
+		}
+
+		if ( !isset($this->reverse_item_lookup[$topmenu['url']]) ) { //Prefer sub-menus.
+			if ( $this->is_item_visitable($topmenu) ) {
+				$this->reverse_item_lookup[$topmenu['url']] = $topmenu;
+			}
+		}
+
+		$has_submenu_icons = false;
+		foreach($topmenu['items'] as $item) {
+			$trueAccess = isset($this->page_access_lookup[$item['url']]) ? $this->page_access_lookup[$item['url']] : null;
+			if ( ($trueAccess === 'do_not_allow') && ($item['access_level'] !== $trueAccess) ) {
+				$item['access_level'] = $trueAccess;
+				$reason = sprintf(
+					'There is a hidden menu item with the same URL (%1$s) but a higher priority.',
+					$item['url']
+				);
+				$item['access_decision_reason'] = $reason;
+
+				if ( isset($item['access_check_log']) ) {
+					$item['access_check_log'][] = sprintf(
+						'+ Override: %1$s Setting the capability to "%2$s".',
+						$reason,
+						$trueAccess
+					);
+					$item['access_check_log'][] = str_repeat('=', 79);
+				}
+			}
+
+			if ( $this->is_item_visitable($item) ) {
+				$this->reverse_item_lookup[$item['url']] = $item;
+			}
+
+			//Skip missing and hidden items
+			if ( !empty($item['missing']) || !empty($item['hidden']) ) {
+				continue;
+				//Note: Cosmetically hiding the top-level "Profile" menu that non-admin users see
+				//doesn't work. The special case we have for that in ameMenuItem::template_id()
+				//handles the usually-invisible submenu item "Profile -> Profile", not the top-level
+				//"Profile" menu. That works for access /control because they have the same URL, but
+				//not for other settings like cosmetic hiding or custom icons.
+			}
+
+			//Keep track of which menus have items with icons. Ignore hidden items.
+			$has_submenu_icons = $has_submenu_icons
+				|| (!empty($item['has_submenu_icon']) && $item['access_level'] !== 'do_not_allow');
+
+			if ( !empty($item['items']) ) {
+				$this->build_nested_submenu($item, $menu, $submenu);
+			}
+
+			$submenu[$topmenu['file']][] = $this->convert_to_wp_format($item);
+		}
+
+		//Skip missing and hidden menus.
+		if ( !empty($topmenu['missing']) || !empty($topmenu['hidden']) ) {
+			return;
+		}
+
+		//The ame-has-submenu-icons class lets us change the appearance of all submenu items at once,
+		//without having to add classes/styles to each item individually.
+		if ( $has_submenu_icons && (strpos($topmenu['css_class'], 'ame-has-submenu-icons') === false) )  {
+			$topmenu['css_class'] .= ' ame-has-submenu-icons';
+		}
+
+		$menu[] = $this->convert_to_wp_format($topmenu);
+	}
+
+	/**
+	 * Generate WP-compatible menu items for deeply nested submenus - that is, third level and beyond.
+	 *
+	 * @param array $item
+	 * @param array $wpMenu
+	 * @param array $wpSubmenu
+	 */
+	private function build_nested_submenu(&$item, &$wpMenu, &$wpSubmenu) {
+		static $uniquePrefix = null, $submenuCounter = 0;
+		if ( empty($item['items']) ) {
+			return;
+		}
+
+		$this->custom_menu_is_deep = true;
+
+		if ( $uniquePrefix === null ) {
+			$uniquePrefix = (string) wp_rand(1000, 9999);
+		}
+
+		$submenuCounter++;
+		$uniqueClass = 'ame-ds-m' . $uniquePrefix . $submenuCounter;
+		$submenuClass = 'ame-ds-child-of-' . $uniqueClass;
+
+		//Flag the parent item as having a submenu.
+		$item['css_class'] .= ' ame-has-deep-submenu ' . $uniqueClass;
+
+		//Output the submenu itself as a separate top level menu. The Pro version will then use JS to move it
+		//to the right place in the DOM and make it work like a nested submenu. The free version doesn't have
+		//that feature, but the menu will still be usable.
+		$containerTopLevelMenu = array_merge(
+			$item,
+			array(
+				'css_class' => 'menu-top ' . $submenuClass,
+				'icon_url'  => 'dashicons-menu',
+
+				//To avoid submenu key collisions and ID clashes, let's give each menu a unique slug/URL.
+				'file'      => '#ame-uds-p' . $submenuCounter . '-' . $item['file'],
+			)
+		);
+
+		$this->build_top_level_item($containerTopLevelMenu, $wpMenu, $wpSubmenu);
 	}
 
 	/**
@@ -1891,7 +2466,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 */
 	private function convert_to_wp_format($item) {
 		//Build the menu structure that WP expects
-		$wp_item = array(
+		return array(
 			$item['menu_title'],
 			$item['access_level'],
 			$item['file'],
@@ -1900,8 +2475,6 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			$item['hookname'], //ID
 			isset($item['wp_icon_url']) ? $item['wp_icon_url'] : $item['icon_url'],
 		);
-
-		return $wp_item;
 	}
 
 	/**
@@ -1917,20 +2490,26 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 * @param array $item Menu item in the internal format.
 	 * @param string $item_type Either 'menu' or 'submenu'.
 	 * @param array $parent Optional. The parent of this sub-menu item. Top level menus have no parent.
+	 * @param bool $is_deep Optional. Whether this is a deeply nested menu item.
 	 * @return array Menu item in the internal format.
 	 */
-	private function prepare_for_output($item, $item_type = 'menu', $parent = array()) {
+	private function prepare_for_output($item, $item_type = 'menu', $parent = array(), $is_deep = false) {
 		$parent_file = isset($parent['file']) ? $parent['file'] : null;
 
-		// Special case : plugin pages that have been moved from a sub-menu to a different
-		// menu or the top level. We'll need to adjust the file field to point to the correct URL.
-		// This is required because WP identifies plugin pages using *both* the plugin file
-		// and the parent file.
-		if ( $item['template_id'] !== '' && !$item['separator'] ) {
+		/*
+		 * Special case: Items that use hooks and whose parent file has changed.
+		 * We'll need to set the "file" field to the fully qualified menu URL. This is required
+		 * because WP generates menu URLs using *both* the item file and the parent file.
+		 *
+		 * Applies to:
+		 * 1) Items that have been moved from one sub-menu to another, or to the top level.
+		 * 2) Deeply nested items. In this case, the parent slug is randomly generated.
+		 */
+		if ( $item['template_id'] !== '' && empty($item['separator']) ) {
 			$template = $this->item_templates[$item['template_id']];
 			if ( $template['defaults']['is_plugin_page'] ) {
 				$default_parent = $template['defaults']['parent'];
-				if ( $parent_file != $default_parent ){
+				if ( ($parent_file != $default_parent) || $is_deep ) {
 					$item['file'] = $template['defaults']['url'];
 				}
 			}
@@ -1948,6 +2527,10 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			if ( strpos($cssClass, ameMenuItem::unclickableTemplateClass) === false ) {
 				$item['css_class'] = ameMenuItem::unclickableTemplateClass . ' ' . $cssClass;
 			}
+
+			//Mark unclickable items as not visitable. The submenus (if any) can be visited,
+			//but the item itself doesn't link to anything.
+			$item['is_unvisitable'] = true;
 		}
 
 		//Make the default submenu icon the same as the parent icon.
@@ -1961,7 +2544,8 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		//Menus that have both a custom icon URL and a "menu-icon-*" class will get two overlapping icons.
 		//Fix this by automatically removing the class. The user can set a custom class attr. to override.
 		$hasCustomIconUrl = !ameMenuItem::is_default($item, 'icon_url');
-		$hasIcon = !in_array(ameMenuItem::get($item, 'icon_url'), array('', 'none', 'div'));
+		$tempIconUrl = ameMenuItem::get($item, 'icon_url', '');
+		$hasIcon = !in_array($tempIconUrl, array('', 'none', 'div'));
 		if (
 			ameMenuItem::is_default($item, 'css_class')
 			&& $hasCustomIconUrl
@@ -1973,8 +2557,14 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			}
 		}
 
-		if ( $hasCustomIconUrl && (strpos(ameMenuItem::get($item, 'icon_url'), 'dashicons-') === 0) ) {
-			$item['css_class'] = ameMenuItem::get($item, 'css_class', '') . ' ame-has-custom-dashicon';
+		if ( $hasCustomIconUrl ) {
+			//Is it a Dashicon?
+			if ( (strpos($tempIconUrl, 'dashicons-') === 0) ) {
+				$item['css_class'] = ameMenuItem::get($item, 'css_class', '') . ' ame-has-custom-dashicon';
+			//Is it a URL-looking thing and not an inline image?
+			} else if ( (strpos($tempIconUrl, '/') !== false) && (strpos($tempIconUrl, 'data:image') === false) ) {
+				$item['css_class'] = ameMenuItem::get($item, 'css_class', '') . ' ame-has-custom-image-url';
+			}
 		}
 
 		//WPML support: Translate only custom titles. See further below.
@@ -1998,8 +2588,14 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 		//Menus without a custom icon image should have it set to "none" (or "div" in older WP versions).
 		//See /wp-admin/menu-header.php for details on how this works.
-		if ( $item['icon_url'] === '' ) {
+		if ( !isset($item['icon_url']) || ($item['icon_url'] === '') ) {
 			$item['icon_url'] = 'none';
+		}
+
+		//Set a flag on top level menus. It's used when determining the current
+		//menu item based on the current URL.
+		if ( $item_type === 'menu' ) {
+			$item['is_top'] = true;
 		}
 
 		//Submenus must not have the "menu-top" class(-es). In WP versions that support submenu CSS classes,
@@ -2042,7 +2638,10 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		}
 
 		//WPML support: Use translated menu titles where available.
-		if ( !$item['separator'] && $hasCustomMenuTitle && function_exists('icl_t') ) {
+		if (
+			empty($item['separator']) && $hasCustomMenuTitle && function_exists('icl_t')
+			&& !empty($this->options['wpml_support_enabled'])
+		) {
 			$item['menu_title'] = icl_t(
 				self::WPML_CONTEXT,
 				$this->get_wpml_name_for($item, 'menu_title'),
@@ -2195,6 +2794,17 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		return $item;
 	}
 
+	/**
+	 * Check if a menu item can be visited/navigated to.
+	 * Most regular items can be visited. Separators and some special item types cannot.
+	 *
+	 * @param array $item
+	 * @return bool
+	 */
+	private function is_item_visitable($item) {
+		return empty($item['separator']) && empty($item['is_unvisitable']);
+	}
+
   /**
    * Output the menu editor page
    *
@@ -2204,11 +2814,14 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		if ( !$this->current_user_can_edit_menu() ){
 			wp_die(sprintf(
 				'You do not have sufficient permissions to use Admin Menu Editor. Required: <code>%s</code>.',
-				htmlentities($this->options['plugin_access'])
+				esc_html($this->options['plugin_access'])
 			));
 		}
 
 		$action = isset($this->post['action']) ? $this->post['action'] : (isset($this->get['action']) ? $this->get['action'] : '');
+		if ( !empty($action) ) {
+			do_action('admin_menu_editor-page_action-' . $action, $this->post);
+		}
 		do_action('admin_menu_editor-header', $action, $this->post);
 
 		if ( !empty($action) ) {
@@ -2244,6 +2857,14 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		do_action('admin_menu_editor-footer-' . $this->current_tab, $action);
 	}
 
+	public function trigger_tab_load_event() {
+		//Modules can use this hook in place of the "load-$page_hook" action. This way a module
+		//doesn't need to know what the page hook is, and it can easily target a specific tab.
+		if ( !empty($this->current_tab) ) {
+			do_action('admin_menu_editor-load_tab-' . $this->current_tab);
+		}
+	}
+
 	private function repair_database() {
 		global $wpdb; /** @var wpdb $wpdb */
 
@@ -2253,6 +2874,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		}
 
 		echo '<div class="wrap"><h1>Repairing database...</h1><p></p>';
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery,WordPress.DB.SlowDBQuery -- Special case: Data recovery attempt.
 
 		$options_to_repair = array(
 			$this->option_name,
@@ -2261,10 +2883,10 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			'ws_abe_admin_bar_settings',
 		);
 
-		echo "Repair {$wpdb->sitemeta}<br>";
+		printf("Repair %s<br>", esc_html($wpdb->sitemeta));
 		$wpdb->query('REPAIR TABLE ' . $wpdb->sitemeta);
 
-		echo "Lock {$wpdb->sitemeta}<br>";
+		printf("Lock %s<br>", esc_html($wpdb->sitemeta));
 		$wpdb->query('LOCK TABLES ' . $wpdb->sitemeta);
 
 		foreach($options_to_repair as $option) {
@@ -2272,7 +2894,8 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 				continue; //Sanity check.
 			}
 
-			echo "Fetch option {$option}<br>";
+			printf("Fetch option %s<br>", esc_html($option));
+			/** @noinspection SqlResolve */
 			$row = $wpdb->get_row($wpdb->prepare(
 				"SELECT * FROM {$wpdb->sitemeta} WHERE meta_key = %s LIMIT 1",
 				$option
@@ -2283,10 +2906,10 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 				continue;
 			}
 
-			echo "Delete all rows where meta_key = {$option}<br>";
+			printf("Delete all rows where meta_key = %s<br>", esc_html($option));
 			$wpdb->delete($wpdb->sitemeta, array('meta_key' => $option), '%s');
 
-			echo "Recreate the first copy of {$option}<br>";
+			printf("Recreate the first copy of %s<br>", esc_html($option));
 			$wpdb->insert(
 				$wpdb->sitemeta,
 				array(
@@ -2298,8 +2921,9 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			);
 		}
 
-		echo "Unlock {$wpdb->sitemeta}<br>";
+		printf("Unlock %s<br>", esc_html($wpdb->sitemeta));
 		$wpdb->query('UNLOCK TABLES');
+		// phpcs:enable
 
 		echo "Done.<br>";
 		echo '<div>';
@@ -2316,37 +2940,63 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 				try {
 					$menu = ameMenu::load_json($post['data'], true);
 				} catch (InvalidMenuException $ex) {
-					$debugData = '';
-					$debugData .= "Exception:\n"      . $ex->getMessage() . "\n\n";
+					// phpcs:disable WordPress.PHP.DevelopmentFunctions.error_log_print_r -- Debug output for exceptional cases.
+					$debugData = "Exception:\n" . $ex->getMessage() . "\n\n";
 					$debugData .= "Used POST data:\n" . print_r($this->post, true) . "\n\n";
 					$debugData .= "Original POST:\n"  . print_r($this->originalPost, true) . "\n\n";
 					$debugData .= "\$_POST global:\n" . print_r($_POST, true);
 
-					$debugData = sprintf(
+					$debugOutput = sprintf(
 						"<textarea rows=\"30\" cols=\"100\">%s</textarea>",
-						htmlentities($debugData)
+						esc_textarea($debugData)
 					);
 
 					wp_die(
 						"Error: Failed to decode menu data!<br><br>\n"
 						. "Please send this debugging information to the developer: <br>"
-						. $debugData
+						// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped above, see sprintf() call.
+						. $debugOutput
 					);
-
-					return;
+					// phpcs:enable
 				}
 
 				//Sanitize menu item properties.
 				$menu['tree'] = ameMenu::sanitize($menu['tree']);
 
+				$deleteOrphanActorSettings = !empty($this->options['delete_orphan_actor_settings']);
+				$actorCleaner = new ameActorAccessCleaner();
+
 				//Discard capabilities that refer to unregistered post types or taxonomies.
 				if ( !empty($menu['granted_capabilities']) ) {
 					$capFilter = new ameGrantedCapabilityFilter();
 					$menu['granted_capabilities'] = $capFilter->clean_up($menu['granted_capabilities']);
+
+					//Optionally, do the same for missing roles and users.
+					if ( $deleteOrphanActorSettings ) {
+						$menu['granted_capabilities'] = $actorCleaner->cleanUpDictionary($menu['granted_capabilities']);
+					}
+				}
+
+				//Remove menu permissions associated with missing roles and users.
+				if ( $deleteOrphanActorSettings ) {
+					$menu['tree'] = ameMenu::map_items(
+						$menu['tree'],
+						function ($item) use ($actorCleaner) {
+							if ( !empty($item['grant_access']) ) {
+								$item['grant_access'] = $actorCleaner->cleanUpDictionary($item['grant_access']);
+							}
+							return $item;
+						}
+					);
 				}
 
 				//Remember if the user has changed any menu icons to different Dashicons.
 				$menu['has_modified_dashicons'] = ameModifiedIconDetector::detect($menu);
+
+				//Add a modification timestamp to help ensure that the new menu data will be different.
+				//This way update_option() and similar functions should only return false when there is
+				//an actual error, not just because the data hasn't changed.
+				$menu['last_modified_on'] = gmdate('c');
 
 				//Which menu configuration are we changing?
 				$config_id = isset($post['config_id']) ? $post['config_id'] : null;
@@ -2355,7 +3005,45 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 				}
 
 				//Save the custom menu
-				$this->set_custom_menu($menu, $config_id);
+				if ( !$this->set_custom_menu($menu, $config_id) ) {
+					$messages = array('Error: Could not save menu settings.');
+
+					global $wpdb;
+					if ( !empty($wpdb->last_error) ) {
+						$messages[] = 'Last database error: "' . esc_html($wpdb->last_error) . '"';
+					}
+
+					//Check the character set of the wp_options and wp_sitemeta tables.
+					$bad_charsets = array('utf8', 'utf8mb3');
+					$tables_to_check = array(array($wpdb->options, 'option_value'));
+					if ( is_multisite() ) {
+						$tables_to_check[] = array($wpdb->sitemeta, 'meta_value');
+					}
+					foreach ($tables_to_check as $item) {
+						list($table, $column) = $item;
+						if ( empty($table) ) {
+							continue;
+						}
+						$current_charset = $wpdb->get_col_charset($table, $column);
+						if ( in_array($current_charset, $bad_charsets) ) {
+							$messages[] = sprintf(
+								'<p>Warning: The <code>%s</code> database table uses the outdated <code>%s</code> ' .
+								'character set. This can prevent you from saving settings that contain emojis, ' .
+								'certain Chinese characters, and so on. It is recommended to convert the table ' .
+								'to the <code>utf8mb4</code> character set.</p>',
+								esc_html($wpdb->options),
+								esc_html($current_charset)
+							);
+						}
+					}
+					// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Should be escaped before.
+					wp_die(implode("<br>\n", $messages));
+				}
+
+				//Save nesting settings.
+				if ( $this->update_nesting_settings($post) ) {
+					$this->save_options();
+				}
 
 				//Redirect back to the editor and display the success message.
 				$query = array('message' => 1);
@@ -2371,7 +3059,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 					}
 				}
 
-				wp_redirect( add_query_arg($query, $url) );
+				wp_safe_redirect( add_query_arg($query, $url) );
 				die();
 			} else {
 				$message = "Failed to save the menu. ";
@@ -2381,7 +3069,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 						intval($this->post['data_length'])
 					);
 				}
-				wp_die($message);
+				wp_die(esc_html($message));
 			}
 
 		} else if ( $action == 'save_settings' ) {
@@ -2480,8 +3168,23 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 				}
 			}
 
+			//Whether to delete settings associated with roles/users that no longer exist.
+			$this->options['delete_orphan_actor_settings'] = !empty($this->post['delete_orphan_actor_settings']);
+
+			//Menu size optimization.
+			$this->options['optimize_custom_menu_size'] = !empty($this->post['optimize_custom_menu_size']);
+
 			//Menu data compression.
 			$this->options['compress_custom_menu'] = !empty($this->post['compress_custom_menu']);
+
+			//WPML support.
+			$this->options['wpml_support_enabled'] = !empty($this->post['wpml_support_enabled']);
+
+			//bbPress override support.
+			$this->options['bbpress_override_enabled'] = !empty($this->post['bbpress_override_enabled']);
+
+			//Three level menus / deep nesting.
+			$this->update_nesting_settings($this->post);
 
 			//Active modules.
 			$activeModules = isset($this->post['active_modules']) ? (array)$this->post['active_modules'] : array();
@@ -2491,11 +3194,47 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 				$activeModules
 			);
 
+			do_action('admin_menu_editor-settings_changed', $this->post);
+
 			$this->save_options();
-			wp_redirect(add_query_arg('message', 1, $this->get_settings_page_url()));
+			wp_safe_redirect(add_query_arg('message', 1, $this->get_settings_page_url()));
+			exit;
 		}
 	}
 
+	/**
+	 * Update menu nesting/three level settings.
+	 *
+	 * Note: This method does not actually save the new settings to the database,
+	 * it just modifies them in memory.
+	 *
+	 * @param array $post
+	 * @return boolean True if settings were changed, false otherwise.
+	 */
+	private function update_nesting_settings($post) {
+		if ( !isset($post['deep_nesting_enabled']) ) {
+			return false;
+		}
+
+		$nesting_enabled = $this->json_decode($post['deep_nesting_enabled']);
+		$valid_nesting_settings = array(null, true, false);
+		if (
+			in_array($nesting_enabled, $valid_nesting_settings, true)
+			&& ($nesting_enabled !== $this->options['deep_nesting_enabled'])
+		) {
+			$this->options['deep_nesting_enabled'] = $nesting_enabled;
+			if ( $nesting_enabled !== null ) {
+				$this->options['was_nesting_ever_changed'] = true;
+			}
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * @noinspection PhpArrayWriteIsNotUsedInspection -- $editor_data is used in the editor-page.php template.
+	 */
 	private function display_editor_ui() {
 		//Prepare a bunch of parameters for the editor.
 		$editor_data = array(
@@ -2514,23 +3253,35 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		$default_menu = $this->get_default_menu();
 
 		//Is there a custom menu?
-		if (!empty($this->merged_custom_menu)){
+		$custom_menu = null;
+		if ( !empty($this->merged_custom_menu) ) {
 			$custom_menu = $this->merged_custom_menu;
 		} else {
-			//Start out with the default menu if there is no user-created one
-			$custom_menu = $default_menu;
-		}
+			if ( $this->loaded_menu_config_id ) {
+				//It's possible that we might have a custom configuration that just doesn't have
+				//a menu tree, so the merged config would be uninitialized. In that case, keep
+				//the custom config but take the default menu tree.
+				$stored_custom_config = $this->load_custom_menu($this->loaded_menu_config_id);
+				if ( $stored_custom_config ) {
+					if ( empty($stored_custom_config['tree']) ) {
+						$stored_custom_config['tree'] = $default_menu['tree'] ?: [];
+					}
+					$custom_menu = $stored_custom_config;
+				}
+			}
 
-		//The editor doesn't use the color CSS. Including it would just make the page bigger and waste bandwidth.
-		unset($custom_menu['color_css']);
-		unset($custom_menu['color_css_modified']);
+			if ( $custom_menu === null ) {
+				//Start out with the default menu if there is no user-created one.
+				$custom_menu = $default_menu;
+			}
+		}
 
 		//Encode both menus as JSON
 		$editor_data['default_menu_js'] = ameMenu::to_json($default_menu);
 		$editor_data['custom_menu_js'] = ameMenu::to_json($custom_menu);
 
 		//Create a list of all known capabilities and roles. Used for the drop-down list on the access field.
-		$all_capabilities = ameRoleUtils::get_all_capabilities();
+		$all_capabilities = ameRoleUtils::get_all_capabilities(is_multisite());
 		//"level_X" capabilities are deprecated so we don't want people using them.
 		//This would look better with array_filter() and an anonymous function as a callback.
 		for($level = 0; $level <= 10; $level++){
@@ -2565,8 +3316,19 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 * @return array
 	 */
 	private function get_default_menu() {
-		$default_tree = ameMenu::wp2tree($this->default_wp_menu, $this->default_wp_submenu, $this->menu_url_blacklist);
-		$default_menu = ameMenu::load_array($default_tree);
+		$default_tree = ameMenu::wp2tree(
+			$this->default_wp_menu,
+			$this->default_wp_submenu,
+			$this->get_menu_url_black_list()
+		);
+		try {
+			$default_menu = ameMenu::load_array($default_tree);
+		} catch (InvalidMenuException $e) {
+			throw new LogicException(
+				'An unexpected exception was thrown while loading the default admin menu. '
+				. 'This is most likely a bug. The default menu should always be valid.'
+			);
+		}
 		return $default_menu;
 	}
 
@@ -2575,43 +3337,79 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 *
 	 * @return array
 	 */
-	public function get_active_admin_menu() {
+	public function get_active_admin_menu_tree() {
 		if ( !did_action('admin_menu') && !did_action('network_admin_menu') ) {
 			throw new LogicException(__METHOD__ . ' was called too early. You must only call it after the admin menu is ready.');
 		}
 
 		if (!empty($this->merged_custom_menu)){
-			return $this->merged_custom_menu;
+			$config = $this->merged_custom_menu;
 		} else {
-			return $this->get_default_menu();
+			$config = $this->get_default_menu();
 		}
+		return $config['tree'] ?: array();
 	}
 
 	/**
 	 * Display the header of the "Menu Editor" page.
 	 * This includes the page heading and tab list.
+	 *
+	 * @param array $extra_wrap_classes Additional CSS classes to add to the page wrapper.
 	 */
-	public function display_settings_page_header() {
+	public function display_settings_page_header($extra_wrap_classes = []) {
+		if ( !$this->is_pro_version() ) {
+			$this->output_upgrade_to_pro_button_script();
+		}
+
 		$wrap_classes = array('wrap');
 		if ( $this->is_pro_version() ) {
 			$wrap_classes[] = 'ame-is-pro-version';
 		} else {
 			$wrap_classes[] = 'ame-is-free-version';
 		}
+		if ( isset($GLOBALS['wp_version']) && version_compare($GLOBALS['wp_version'], '5.3-RC1', '>=') ) {
+			$wrap_classes[] = 'ame-is-wp53-plus';
+		}
+		$wrap_classes[] = 'ame-condensed-tabs-enabled';
 
-		echo '<div class="', implode(' ', $wrap_classes), '">';
+		//This method is also an action callback, and the default argument for actions is an empty string.
+		if ( !is_array($extra_wrap_classes) ) {
+			$extra_wrap_classes = [];
+		}
+		$wrap_classes = array_merge($wrap_classes, $extra_wrap_classes);
+
+		echo '<div class="', esc_attr(implode(' ', $wrap_classes)), '">';
 		printf(
-			'<%1$s id="ws_ame_editor_heading">%2$s</%1$s>',
+			'<%1$s id="ws_ame_editor_heading" style="visibility: hidden">%2$s</%1$s>',
+			//phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Should only ever be "h1" or "h2".
 			self::$admin_heading_tag,
-			apply_filters('admin_menu_editor-self_page_title', 'Menu Editor')
+			esc_html($this->get_settings_page_heading_text())
 		);
 
 		do_action('admin_menu_editor-display_tabs');
 
+		$saved = false;
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Just showing a "settings saved" notice.
 		if ( isset($_GET['message']) && (intval($_GET['message']) === 1) ) {
 			add_settings_error('ame-settings-page', 'settings_updated', __('Settings saved.'), 'updated');
+			$saved = true;
 		}
 		settings_errors('ame-settings-page');
+
+		if ( $saved && ($this->current_tab === 'editor') ) {
+			$this->menu_structure_feature->onSettingsSaved();
+		}
+
+		if ( !empty($this->current_tab) ) {
+			do_action('admin_menu_editor-tab_admin_notices-' . $this->current_tab);
+		}
+	}
+
+	private function get_settings_page_heading_text() {
+		return apply_filters(
+			'admin_menu_editor-self_page_title',
+			'Menu Editor'
+		);
 	}
 
 	public function display_settings_page_footer() {
@@ -2622,14 +3420,20 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 * Display the tabs for the settings page.
 	 */
 	public function display_editor_tabs() {
-		echo '<h2 class="nav-tab-wrapper">';
+		echo '<h2 class="nav-tab-wrapper ws-ame-nav-tab-list" style="visibility: hidden">';
+
+		printf(
+			'<span id="ws_ame_tab_leader_heading">%s</span>',
+			esc_html($this->get_settings_page_heading_text())
+		);
+
 		foreach($this->tabs as $slug => $title) {
 			printf(
 				'<a href="%s" id="%s" class="nav-tab%s">%s</a>',
-				esc_attr(add_query_arg('sub_section', $slug, self_admin_url($this->settings_link))),
+				esc_attr($this->get_tab_url($slug)),
 				esc_attr('ws_ame_' . $slug . '_tab'),
 				$slug === $this->current_tab ? ' nav-tab-active' : '',
-				$title
+				esc_html($title)
 			);
 		}
 		echo '</h2>';
@@ -2641,16 +3445,31 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 */
 	private function display_plugin_settings_ui() {
 		//These variables are used by settings-page.php.
-		/** @noinspection PhpUnusedLocalVariableInspection */
 		$settings = $this->options;
-		/** @noinspection PhpUnusedLocalVariableInspection */
 		$settings_page_url = $this->get_settings_page_url();
-		/** @noinspection PhpUnusedLocalVariableInspection */
 		$editor_page_url = admin_url($this->settings_link);
-		/** @noinspection PhpUnusedLocalVariableInspection */
 		$db_option_name = $this->option_name;
 
 		require dirname(__FILE__) . '/settings-page.php';
+	}
+
+	private function output_upgrade_to_pro_button_script() {
+		//Output the JS that adds the "Upgrade to Pro" button to the screen options area.
+		?>
+		<script type="text/javascript">
+			(function ($) {
+				let screenLinks = $('#screen-meta-links');
+				if (screenLinks.length <= 0) {
+					 screenLinks = $('<div id="screen-meta-links"></div>').prependTo('#wpbody-content');
+				}
+				screenLinks.append(
+					'<div id="ws-pro-version-notice" class="custom-screen-meta-link-wrap">' +
+					'<a href="https://adminmenueditor.com/upgrade-to-pro/?utm_source=Admin%2BMenu%2BEditor%2Bfree&utm_medium=text_link&utm_content=top_upgrade_link&utm_campaign=Plugins" id="ws-pro-version-notice-link" class="show-settings custom-screen-meta-link" target="_blank" title="View Pro version details">Upgrade to Pro</a>' +
+					'</div>'
+				);
+			})(jQuery);
+		</script>
+		<?php
 	}
 
 	/**
@@ -2672,7 +3491,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 *
 	 * @return string
 	 */
-	private function get_settings_page_url() {
+	public function get_settings_page_url() {
 		return $this->get_plugin_page_url(array('sub_section' => 'settings'));
 	}
 
@@ -2706,6 +3525,21 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			&& isset($this->get['page']) && ($this->get['page'] == 'menu_editor');
 	}
 
+	public function is_tab_registered($tab_slug) {
+		return isset($this->tabs[$tab_slug]);
+	}
+
+	/**
+	 * @param string $tab_slug
+	 * @return string|null
+	 */
+	public function get_tab_url($tab_slug) {
+		if ( !$this->is_tab_registered($tab_slug) ) {
+			return null;
+		}
+		return add_query_arg('sub_section', $tab_slug, self_admin_url($this->settings_link));
+	}
+
 	/**
 	 * Get the list of virtual capabilities.
 	 *
@@ -2723,8 +3557,16 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			return $this->cached_virtual_caps[$mode];
 		}
 
-		$custom_menu = $this->load_custom_menu();
+		try {
+			$custom_menu = $this->load_custom_menu();
+		} catch (InvalidMenuException $e) {
+			return array();
+		}
 		if ( $custom_menu === null ){
+			return array();
+		}
+
+		if ( $this->menu_structure_feature->isCustomizationDisabled() ) {
 			return array();
 		}
 
@@ -2761,8 +3603,10 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 		//Include caps that are required to access menu items (grant_access).
 		$menuCaps = array();
-		foreach($custom_menu['tree'] as $item) {
-			$menuCaps = self::array_replace_recursive($menuCaps, $this->get_virtual_caps_for($item));
+		if ( !empty($custom_menu['tree']) ) {
+			foreach ($custom_menu['tree'] as $item) {
+				$menuCaps = self::array_replace_recursive($menuCaps, $this->get_virtual_caps_for($item));
+			}
 		}
 
 		//grant_access settings on individual items have precedence.
@@ -2850,6 +3694,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		$this->cached_virtual_caps = null;
 		$this->cached_user_caps = array();
 		$this->cached_user_roles = array();
+		$this->cached_virtual_user_caps = array();
 
 		if ($this->options['menu_config_scope'] === 'site') {
 			$this->cached_custom_menu = null;
@@ -2857,55 +3702,19 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		}
 	}
 
-	/**
-	 * Create a virtual 'super_admin' capability that only super admins have.
-	 * This function accomplishes that by by filtering 'user_has_cap' calls.
-	 *
-	 * @param array $allcaps All capabilities belonging to the current user, cap => true/false.
-	 * @param array $required_caps The required capabilities.
-	 * @param array $args The capability passed to current_user_can, the current user's ID, and other args.
-	 * @return array Filtered version of $allcaps
-	 */
-	function hook_user_has_cap($allcaps, /** @noinspection PhpUnusedParameterInspection */ $required_caps, $args){
-		//Be careful not to overwrite a super_admin cap added by other plugins
-		//For example, Advanced Access Manager also adds this capability.
-		if ( is_array($allcaps) && !isset($allcaps['super_admin']) ){
-			$user_id = intval($args[1]);
-			if ( $user_id != 0 ) {
-				$allcaps['super_admin'] = is_multisite() && is_super_admin($user_id);
-			}
-		}
-		return $allcaps;
-	}
-
-	/**
-	 * AJAX callback for saving screen options (whether to show or to hide advanced menu options).
-	 *
-	 * Handles the 'ws_ame_save_screen_options' action. The new option value
-	 * is read from $_POST['hide_advanced_settings'].
-	 *
-	 * @return void
-	 */
-	function ajax_save_screen_options(){
-		if (!$this->current_user_can_edit_menu() || !check_ajax_referer('ws_ame_save_screen_options', false, false)){
-			die( $this->json_encode( array(
-				'error' => "You're not allowed to do that!"
-			 )));
-		}
-
-		$this->options['hide_advanced_settings'] = !empty($this->post['hide_advanced_settings']);
-		$this->options['show_extra_icons'] = !empty($this->post['show_extra_icons']);
-		$this->save_options();
-		die('1');
-	}
-
 	public function ajax_hide_hint() {
-		if ( !isset($this->post['hint']) || !$this->current_user_can_edit_menu() ){
+		check_ajax_referer('ws_ame_hide_hint');
+
+		if (
+			!isset($this->post['hint'])
+			|| !is_string($this->post['hint'])
+			|| !$this->current_user_can_edit_menu()
+		){
 			die("You're not allowed to do that!");
 		}
 
 		$show_hints = $this->get_hint_visibility();
-		$show_hints[strval($this->post['hint'])] = false;
+		$show_hints[$this->post['hint']] = false;
 		$this->set_hint_visibility($show_hints);
 
 		die("OK");
@@ -2948,9 +3757,9 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 */
 	public function ajax_get_pages() {
 		if ( !check_ajax_referer('ws_ame_get_pages', false, false) ) {
-			exit(json_encode(array('error' => 'Invalid nonce.')));
+			exit(wp_json_encode(array('error' => 'Invalid nonce.')));
 		} else if ( !$this->current_user_can_edit_menu() ) {
-			exit(json_encode(array('error' => 'You don\'t have sufficient permissions to edit the admin menu.')));
+			exit(wp_json_encode(array('error' => 'You don\'t have sufficient permissions to edit the admin menu.')));
 		}
 
 		$pages = get_pages(array(
@@ -2973,7 +3782,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			);
 		}
 
-		exit(json_encode($results));
+		exit(wp_json_encode($results));
 	}
 
 	/**
@@ -2981,13 +3790,13 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 */
 	public function ajax_get_page_details() {
 		if ( !check_ajax_referer('ws_ame_get_page_details', false, false) ) {
-			exit(json_encode(array('error' => 'Invalid nonce.')));
+			exit(wp_json_encode(array('error' => 'Invalid nonce.')));
 		} else if ( !$this->current_user_can_edit_menu() ) {
-			exit(json_encode(array('error' => 'You don\'t have sufficient permissions to edit the admin menu.')));
+			exit(wp_json_encode(array('error' => 'You don\'t have sufficient permissions to edit the admin menu.')));
 		}
 
-		$post_id = intval($_GET['post_id']);
-		$blog_id = intval($_GET['blog_id']);
+		$post_id = !empty($_GET['post_id']) ? intval($_GET['post_id']) : 0;
+		$blog_id = !empty($_GET['blog_id']) ? intval($_GET['blog_id']) : 0;
 		$should_switch = function_exists('get_current_blog_id') && ($blog_id !== get_current_blog_id());
 
 		if ( $should_switch ) {
@@ -2996,7 +3805,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 		$page = get_post($post_id);
 		if ( !$page ) {
-			exit(json_encode(array('error' => 'Not found')));
+			exit(wp_json_encode(array('error' => 'Not found')));
 		}
 
 		if ( $should_switch ) {
@@ -3008,7 +3817,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			'blog_id' => $blog_id,
 			'post_title' => $page->post_title,
 		);
-		exit(json_encode($response));
+		exit(wp_json_encode($response));
 	}
 
 	/**
@@ -3016,11 +3825,21 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 * would not be highlighted properly when the user visits them.
 	 */
 	public function enqueue_menu_fix_script() {
+		$inFooter = !$this->is_custom_menu_deep();
+
+		//Compatibility fix for PRO Theme 1.1.5.
+		//This custom admin theme expands the current admin menu via JavaScript by using a "ready" handler.
+		//We need to ensure that we highlight the correct current menu before that happens. This means we
+		//have to enqueue the script in the header and with a higher priority than the PRO Theme script.
+		if ( class_exists('PROTheme', false) ) {
+			$inFooter = false;
+		}
+
 		wp_enqueue_auto_versioned_script(
 			'ame-menu-fix',
 			plugins_url('js/menu-highlight-fix.js', $this->plugin_file),
 			array('jquery'),
-			true
+			$inFooter
 		);
 	}
 
@@ -3038,8 +3857,8 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 		$this->log_security_note(sprintf(
 			'The current menu item is "%s", menu template ID: "%s"',
-			htmlentities($current_item['menu_title']),
-			htmlentities(ameMenuItem::get($current_item, 'template_id', 'N/A'))
+			esc_html($current_item['menu_title']),
+			esc_html(ameMenuItem::get($current_item, 'template_id', 'N/A'))
 		));
 		if ( isset($current_item['access_check_log']) ) {
 			$this->log_security_note($current_item['access_check_log']);
@@ -3050,7 +3869,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		$this->log_security_note(sprintf(
 			'The current user %1$s the "%2$s" capability.',
 			$allow ? 'has' : 'does not have',
-			htmlentities($current_item['access_level'])
+			esc_html($current_item['access_level'])
 		));
 
 		return $allow;
@@ -3079,7 +3898,20 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			return $this->cached_user_caps[$capability];
 		}
 
-		$user_can = apply_filters('admin_menu_editor-current_user_can', current_user_can($capability), $capability);
+		/*
+		 * Some meta caps require an object ID to be passed as the second argument. WordPress core will
+		 * unintentionally trigger a notice if we don't provide that argument. We use a non-existent ID
+		 * to prevent that notice.
+		 *
+		 * NULL, FALSE and 0 are not good alternatives because some WordPress APIs (e.g. get_post) take
+		 * those values as a sign to return the current post/page/taxonomy.
+		 */
+
+		$user_can = apply_filters(
+			'admin_menu_editor-current_user_can',
+			current_user_can($capability, -1),
+			$capability
+		);
 		$this->cached_user_caps[$capability] = $user_can;
 		return $user_can;
 	}
@@ -3090,7 +3922,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 * @uses self::$reverse_item_lookup
 	 * @return array|null Menu item in the internal format, or NULL if no matching item can be found.
 	 */
-	private function get_current_menu_item() {
+	public function get_current_menu_item() {
 		if ( !is_admin() || empty($this->reverse_item_lookup)) {
 			if ( !is_admin() ) {
 				$this->log_security_note('This is not an admin page. is_admin() returns false.');
@@ -3114,6 +3946,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 		$best_item = null;
 		$best_extra_params = PHP_INT_MAX;
+		$best_is_submenu = false;
 
 		$base_site_url = get_site_url();
 		if ( preg_match('@(^\w+://[^/]+)@', $base_site_url, $matches) ) { //Extract scheme + hostname.
@@ -3127,7 +3960,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		$admin_url_is_filtered = has_filter('admin_url');
 
 		$current_url = $base_site_url . remove_query_arg('___ame_dummy_param___');
-		$this->log_security_note(sprintf('Current URL: "%s"', htmlentities($current_url)));
+		$this->log_security_note(sprintf('Current URL: "%s"', esc_html($current_url)));
 
 		$current_url = $this->parse_url($current_url);
 
@@ -3145,6 +3978,23 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			$real_parent = get_admin_page_parent('admin.php');
 			if ( !empty($real_parent) && ($real_parent !== 'admin.php') ) {
 				$current_url['alt_path'] = str_replace('/admin.php', '/' . $real_parent, $current_url['path']);
+			}
+		}
+
+		//Special case: Hook-based plugin pages should only match items that have the same "page" parameter.
+		//WP uses this parameter to construct the hook name, so an item without a matching value won't be
+		//the same admin page.
+		//This is particularly important for blacklisted hidden items since they often have a valid hook,
+		//but they're not included in the admin menu, so there's no true best match. If we treat the "page"
+		//parameter as optional, we might pick some unrelated item that just happens to have the same path.
+		$page_param_required = false;
+		//Is the "page" parameter set and being used by WordPress?
+		global $plugin_page;
+		if ( !empty($plugin_page) && !empty($current_url['params']['page']) ) {
+			//Does it have a hook attached?
+			$hook_name = get_plugin_page_hookname($plugin_page, get_admin_page_parent());
+			if ( $hook_name && (has_action($hook_name) !== false) ) {
+				$page_param_required = true;
 			}
 		}
 
@@ -3186,7 +4036,17 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 				}
 			}
 
-			//Special case: In WP 4.0+ the URL of the "Customize" menu changes often due to a "return" query parameter
+			//Special case: Must match the "page" parameter if required.
+			if ( $is_close_match && $page_param_required ) {
+				if (
+					empty($item_url['params']['page'])
+					|| ($item_url['params']['page'] !== $current_url['params']['page'])
+				) {
+					$is_close_match = false;
+				}
+			}
+
+			//Special case: In WP 4.0+ the URL of the "Customize" menu often changes due to a "return" query parameter
 			//that contains the current page URL. To reliably recognize this item, we should ignore that parameter.
 			if ( $this->endsWith($item_url['path'], 'customize.php') ) {
 				unset($item_url['params']['return']);
@@ -3198,14 +4058,28 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			//The current URL must have as few extra parameters as possible.
 			$extra_params = $this->arrayDiffAssocRecursive($current_url['params'], $item_url['params']);
 
-			if ( $is_close_match && (count($different_params) == 0) && (count($extra_params) < $best_extra_params) ) {
+			$is_submenu = empty($item['is_top']);
+
+			if (
+				$is_close_match
+				&& (count($different_params) == 0)
+				&& (
+					(count($extra_params) < $best_extra_params)
+					//When all else is equal, prefer submenu items.
+					|| (
+						(count($extra_params) === $best_extra_params)
+						&& ($is_submenu && !$best_is_submenu)
+					)
+				)
+			) {
 				$best_item = $item;
 				$best_extra_params = count($extra_params);
+				$best_is_submenu = $is_submenu;
 			}
 		}
 
 		//Special case for CPTs: When the "Add New" menu is disabled by CPT settings (show_ui, etc), and someone goes
-		//to add a new item, WordPress highlights the "$CPT-Name" item as the current one. Lets do the same for
+		//to add a new item, WordPress highlights the "$CPT-Name" item as the current one. Let's do the same for
 		//consistency. See also: /wp-admin/post-new.php, lines #20 to #40.
 		if (
 			($best_item === null)
@@ -3232,17 +4106,25 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 * @return array
 	 */
 	private function parse_url($url) {
-		$url_defaults = array_fill_keys(array('scheme', 'host', 'port', 'user', 'pass', 'path', 'query', 'fragment'), '');
-		$url_defaults['port'] = '80';
+		static $url_defaults = array(
+			'scheme'   => '',
+			'host'     => '',
+			'port'     => '80',
+			'user'     => '',
+			'pass'     => '',
+			'path'     => '',
+			'query'    => '',
+			'fragment' => '',
+		);
 
-		$parsed = @parse_url($url);
+		$parsed = wp_parse_url($url); //Requires WP 4.7+ for full functionality.
 		if ( !is_array($parsed) ) {
 			$parsed = array();
 		}
 		$parsed = array_merge($url_defaults, $parsed);
 
 		$params = array();
-		if (!empty($parsed['query'])) {
+		if ( !empty($parsed['query']) ) {
 			wp_parse_str($parsed['query'], $params);
 		};
 		$parsed['params'] = $params;
@@ -3301,9 +4183,27 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		}
 
 		// "/wp-admin/index.php" should match "/wp-admin/".
+		static $wpAdminDir = null;
+		if ( $wpAdminDir === null ) {
+			$wpAdminDir = '/wp-admin/';
+			if ( has_filter('admin_url') ) {
+				//Detect modified admin base URLs. For example, some security and branding plugins
+				//replace "wp-admin" with "something-else".
+				$suffix = 'ame-4425-admin-path-test';
+				$testUrl = self_admin_url($suffix);
+				$lastSlash = strrpos($testUrl, '/', -strlen($suffix) + 1);
+				if ( $lastSlash !== false ) {
+					$firstSlash = strrpos($testUrl, '/', -strlen($suffix) - 2);
+					if ( ($firstSlash !== false) && ($firstSlash !== $lastSlash) ) {
+						$wpAdminDir = substr($testUrl, $firstSlash, $lastSlash - $firstSlash + 1);
+					}
+				}
+			}
+		}
+
 		if (
-			($this->endsWith($path1, '/wp-admin/index.php') && $this->endsWith($path2, '/wp-admin/'))
-			|| ($this->endsWith($path2, '/wp-admin/index.php') && $this->endsWith($path1, '/wp-admin/'))
+			($this->endsWith($path1, $wpAdminDir . 'index.php') && $this->endsWith($path2, $wpAdminDir))
+			|| ($this->endsWith($path2, $wpAdminDir . 'index.php') && $this->endsWith($path1, $wpAdminDir))
 		) {
 			return true;
 		}
@@ -3323,7 +4223,22 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		if ( $len == 0 ) {
 			return true;
 		}
-		return substr($string, -$len) === $suffix;
+		$inputLen = strlen($string);
+		if ( $len > $inputLen ) {
+			return false;
+		}
+		return substr_compare($string, $suffix, $inputLen - $len) === 0;
+	}
+
+	public function get_menu_item_by_url($url) {
+		if ( isset($this->reverse_item_lookup[$url]) ) {
+			return $this->reverse_item_lookup[$url];
+		}
+		return null;
+	}
+
+	public function can_find_items_by_url() {
+		return !empty($this->reverse_item_lookup);
 	}
 
 	public function castValuesToBool($capabilities) {
@@ -3331,8 +4246,17 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			if ( empty($capabilities) ) {
 				$capabilities = array();
 			} else {
-				trigger_error("Unexpected capability array: " . print_r($capabilities, true), E_USER_WARNING);
+				//phpcs:disable WordPress.PHP.DevelopmentFunctions
+				//This should never happen, but if it does, it's not a critical error, so an exception
+				//doesn't seem warranted. We'll log a warning so that technical users can investigate.
+				trigger_error(
+					//WP coding standard thinks some users will have display_errors enabled,
+					//so, regrettably, the error message needs to be escaped.
+					esc_html("Unexpected capability array: " . print_r($capabilities, true)),
+					E_USER_WARNING
+				);
 				return array();
+				//phpcs:enable
 			}
 		}
 		foreach($capabilities as $capability => $value) {
@@ -3395,14 +4319,19 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 * @return void
 	 */
 	function capture_request_vars(){
+		//phpcs:disable WordPress.Security.NonceVerification -- This just captures the request vars. Any verification happens later.
 		$this->post = $this->originalPost = $_POST;
 		$this->get = $_GET;
 
-		/** @noinspection PhpDeprecationInspection */
-		if ( function_exists('get_magic_quotes_gpc') && get_magic_quotes_gpc() ) {
+		if (
+			version_compare(phpversion(), '7.4.0alpha1', '<')
+			&& function_exists('get_magic_quotes_gpc')
+			&& get_magic_quotes_gpc()
+		) {
 			$this->post = stripslashes_deep($this->post);
 			$this->get = stripslashes_deep($this->get);
 		}
+		//phpcs:enable
 	}
 
 	/**
@@ -3451,7 +4380,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			'ame-helper-style',
 			plugins_url('css/admin.css', $this->plugin_file),
 			array(),
-			'20140630-3'
+			'20220912'
 		);
 
 		if ( $this->options['force_custom_dashicons'] ) {
@@ -3462,7 +4391,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 					'ame-force-dashicons',
 					plugins_url('css/force-dashicons.css', $this->plugin_file),
 					array(),
-					'20170607'
+					'20230828-2'
 				);
 			}
 		}
@@ -3505,9 +4434,18 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	}
 
 	/**
+	 * Get the default configuration options.
+	 *
+	 * @return array
+	 */
+	public function get_default_options() {
+		return $this->defaults;
+	}
+
+	/**
 	 * Log a security-related message.
 	 *
-	 * @param string|array $message The message to add tot he log, or an array of messages.
+	 * @param string|array $message The message to add to the log, or an array of messages. Should be HTML safe.
 	 */
 	private function log_security_note($message) {
 		if ( !$this->should_store_security_log() ) {
@@ -3534,7 +4472,11 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		?>
 		<div class="updated">
 			<h3>Admin Menu Editor security log</h3>
-			<?php echo $this->get_formatted_security_log(); ?>
+			<?php
+			//Log formatting uses HTML, and log contents should already be escaped.
+			//phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+			echo $this->get_formatted_security_log();
+			?>
 		</div>
 		<?php
 	}
@@ -3591,7 +4533,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 * @return array Associative array of strings that can be translated, indexed by unique name.
 	 */
 	private function get_wpml_strings($custom_menu) {
-		if ( empty($custom_menu) ) {
+		if ( empty($custom_menu) || empty($custom_menu['tree']) ) {
 			return array();
 		}
 
@@ -3609,7 +4551,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 				}
 			}
 
-			if ( isset($top_menu['items']) && !empty($top_menu['items']) ) {
+			if ( !empty($top_menu['items']) ) {
 				foreach($top_menu['items'] as $item) {
 					if ( $item['separator'] ) {
 						continue;
@@ -3680,32 +4622,71 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	}
 
 	/**
-	 * Compatibility fix for WooCommerce 2.2.1+.
-	 * Summary: When AME is active, an unusable WooCommerce -> WooCommerce menu item shows up. Here we remove it.
-	 *
-	 * WooCommerce creates a top level "WooCommerce" menu with no callback. By default, WordPress automatically adds
-	 * a submenu item with the same name. However, since the item doesn't have a callback, it is unusable and clicking
-	 * it just triggers a "Cannot load woocommerce" error. So WooCommerce removes this item in an admin_head hook to
-	 * hide it. With AME active, the item shows up anyway, and users get confused by the error.
-	 *
-	 * Fix it by removing the problematic menu item.
-	 *
-	 * Caution: If the user hides all WooCommerce submenus but not the top level menu, the WooCommerce menu will still
-	 * show up but be inaccessible. This may be slightly counter-intuitive, but seems reasonable.
+	 * Compatibility fixes for WooCommerce.
 	 */
 	private function apply_woocommerce_compat_fix() {
 		if ( !isset($this->default_wp_submenu, $this->default_wp_submenu['woocommerce']) ) {
 			return;
 		}
 
-		$badSubmenuExists = isset($this->default_wp_submenu['woocommerce'][0])
-			&& isset($this->default_wp_submenu['woocommerce'][0][2])
+		/*
+		 * WooCommerce 2.2.1+
+		 *
+		 * When AME is active, an unusable WooCommerce -> WooCommerce menu item shows up. Here we remove it.
+		 *
+		 * WooCommerce creates a top level "WooCommerce" menu with no callback. By default, WordPress
+		 * automatically adds a submenu item with the same name. However, since the item doesn't have
+		 * a callback, it is unusable and clicking it just triggers a "Cannot load woocommerce" error.
+		 * So WooCommerce removes this item in an admin_head hook to hide it. With AME active, the item
+		 * shows up anyway, and users get confused by the error.
+		 *
+		 * Fix it by removing the problematic menu item.
+		 *
+		 * Caution: If the user hides all WooCommerce submenus but not the top level menu, the WooCommerce menu will still
+		 * show up but be inaccessible. This may be slightly counter-intuitive, but seems reasonable.
+		 */
+		$badSubmenuExists = isset($this->default_wp_submenu['woocommerce'][0][2])
 			&& ($this->default_wp_submenu['woocommerce'][0][2] === 'woocommerce');
 		$anotherSubmenuExists = isset($this->default_wp_submenu['woocommerce'][1]);
 
 		if ( $badSubmenuExists && $anotherSubmenuExists ) {
 			$this->default_wp_submenu['woocommerce'][0] = $this->default_wp_submenu['woocommerce'][1];
 			unset($this->default_wp_submenu['woocommerce'][1]);
+		}
+
+		/*
+		 * WooCommerce 9.0.1 (and other versions)
+		 *
+		 * WooCommerce creates two "WooCommerce -> Orders" menu items. This has to do with different
+		 * order storage types. WooCommerce removes the redundant item, but that doesn't work when AME
+		 * is active because it happens in the admin_init hook.
+		 *
+		 * According to user reports, when the WooCommerce Subscriptions extension is active, the same
+		 * problem happens with the "WooCommerce -> Subscriptions" item.
+		 *
+		 * Let's check if there are duplicate items and remove the ones that use custom post types.
+		 */
+		$potentialDuplicateItems = [
+			'edit.php?post_type=shop_order'        => 'wc-orders',
+			'edit.php?post_type=shop_subscription' => 'wc-orders--shop_subscription',
+		];
+		foreach ($potentialDuplicateItems as $redundantSlug => $goodSlug) {
+			$redundantItemIndex = null;
+			$goodItemIndex = null;
+			foreach ($this->default_wp_submenu['woocommerce'] as $index => $menu) {
+				//Skip menu items without a slug/URL in case someone adds a custom separator or something.
+				if ( !isset($menu[2]) ) {
+					continue;
+				}
+				if ( $menu[2] === $redundantSlug ) {
+					$redundantItemIndex = $index;
+				} elseif ( $menu[2] === $goodSlug ) {
+					$goodItemIndex = $index;
+				}
+			}
+			if ( ($goodItemIndex !== null) && ($redundantItemIndex !== null) ) {
+				unset($this->default_wp_submenu['woocommerce'][$redundantItemIndex]);
+			}
 		}
 	}
 
@@ -3720,7 +4701,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	 * hook. However, by that time AME has already processed the admin menu, so it doesn't see the change.
 	 *
 	 * Workaround: Run the relevant WooCommerce callback during the "admin_menu" action (before processing the menu).
-	 * The now-redundant"admin_head" hook is then removed.
+	 * The now-redundant "admin_head" hook is then removed.
 	 */
 	private function apply_woocommerce_order_count_fix() {
 		global $wp_filter;
@@ -3793,6 +4774,30 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 				unset($this->default_wp_submenu['index.php'][$index]);
 			}
 		}
+	}
+
+	/**
+	 * Compatibility fix for MailPoet 3 and 4. Last tested with MailPoet 4.49.1.
+	 *
+	 * MailPoet deliberately removes all third-party stylesheets from its admin pages.
+	 * As a result, some AME features that use stylesheets - like custom menu icons and admin
+	 * menu colors - don't work on those pages. Let's fix that by whitelisting our styles.
+	 */
+	private function apply_mailpoet_compat_fix() {
+		add_filter('mailpoet_conflict_resolver_whitelist_style', array($this, '_whitelist_ame_styles_for_mailpoet'));
+	}
+
+	/**
+	 * @internal
+	 * @param array $styles
+	 * @return array
+	 */
+	public function _whitelist_ame_styles_for_mailpoet($styles) {
+		$styles[] = 'ame-custom-menu-colors';
+		$styles[] = 'ame-menu-style-bundle';
+		$styles[] = 'font-awesome\.css';
+		$styles[] = 'force-dashicons\.css';
+		return $styles;
 	}
 
 	/**
@@ -3877,14 +4882,198 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	}
 
 	/**
-	 * The current user has changed; cache their roles.
+	 * The current user has changed; update role and capability caches.
 	 */
 	public function update_current_user_cache() {
 		$user = wp_get_current_user();
 		if ( empty($user) || !$user->exists() ) {
 			return;
 		}
+
+		//Workaround for buggy plugins that unintentionally remove user roles.
+		/** @see WPMenuEditor::get_user_roles */
 		$this->cached_user_roles[$user->ID] = $this->extract_user_roles($user);
+
+		$this->update_virtual_cap_cache($user);
+	}
+
+	/**
+	 * @param WP_User $user
+	 */
+	private function update_virtual_cap_cache($user) {
+		if ( $user === null ) {
+			return;
+		}
+
+		$virtual_caps = array(
+			self::ALL_VIRTUAL_CAPS              => array(),
+			self::DIRECTLY_GRANTED_VIRTUAL_CAPS => array(),
+		);
+
+		//Create a virtual 'super_admin' capability that only super admins have. Be careful not to overwrite
+		//the same cap added by other plugins. For example, Advanced Access Manager also adds this capability.
+		if ( !isset($user->allcaps['super_admin']) ) {
+			$virtual_caps[self::ALL_VIRTUAL_CAPS]['super_admin'] = is_multisite() && is_super_admin($user->ID);
+		}
+
+		$virtual_caps = apply_filters('admin_menu_editor-virtual_caps', $virtual_caps, $user);
+		$this->cached_virtual_user_caps[$user->ID] = $virtual_caps;
+	}
+
+	/**
+	 * Grant virtual caps to the user.
+	 *
+	 * @param array $capabilities All capabilities belonging to the specified user, cap => true/false.
+	 * @param array $required_caps The required capabilities.
+	 * @param array $args The capability passed to current_user_can, the user's ID, and other args.
+	 * @return array Filtered list of capabilities.
+	 */
+	function grant_virtual_caps_to_user($capabilities, /** @noinspection PhpUnusedParameterInspection */ $required_caps, $args){
+		$this->virtual_caps_for_this_call = array();
+
+		if ( $this->disable_virtual_caps ) {
+			return $capabilities;
+		}
+
+		//Compatibility fix for ActivityPub 7.8.5.
+		//ActivityPub incorrectly returns false from its "user_has_cap" filter when checking
+		//for the 'edit_post' capability at least in some situations.
+		if ( !is_array($capabilities) ) {
+			return $capabilities;
+		}
+
+		//The second entry of the $args array should be the user ID
+		if ( count($args) < 2 ) {
+			return $capabilities;
+		}
+		$user_id = intval($args[1]);
+
+		$caps_for_user = $this->get_virtual_caps_for_user($user_id);
+		if ( empty($caps_for_user) ) {
+			return $capabilities;
+		}
+
+		$this->virtual_caps_for_this_call = $caps_for_user;
+
+		$capabilities = array_merge($capabilities, $this->virtual_caps_for_this_call);
+		return $capabilities;
+	}
+
+	/**
+	 * Set the capabilities that were already set by grant_virtual_caps_to_user() again.
+	 *
+	 * The goal of granting the same capabilities twice at different hook priorities is to:
+	 *  1) Make sure meta caps that rely on the granted caps are enabled.
+	 *  2) Reduce the risk that the granted caps will be overridden by other plugins.
+	 *
+	 * @param array $capabilities
+	 * @return array
+	 */
+	public function regrant_virtual_caps_to_user($capabilities) {
+		//Compatibility fix for ActivityPub.
+		if ( !is_array($capabilities) ) {
+			return $capabilities;
+		}
+
+		if ( !empty($this->virtual_caps_for_this_call) ) {
+			$capabilities = array_merge($capabilities, $this->virtual_caps_for_this_call);
+			$this->virtual_caps_for_this_call = array();
+		}
+		return $capabilities;
+	}
+
+	private function get_virtual_caps_for_user($userId) {
+		if ( !isset($this->cached_virtual_user_caps[$userId]) ) {
+			$this->update_virtual_cap_cache($this->get_user_by_id($userId));
+		}
+
+		if ( empty($this->cached_virtual_user_caps[$userId][$this->virtual_cap_mode]) ) {
+			return [];
+		}
+
+		return $this->cached_virtual_user_caps[$userId][$this->virtual_cap_mode];
+	}
+
+	private $cached_identity_mapped_caps = null;
+
+	/**
+	 * Map selected meta caps to themselves so that they can be enabled by our "user_has_cap" filter.
+	 *
+	 * The "virtual capabilities" mechanism enables/disables certain capabilities for a user. That
+	 * doesn't work for meta capabilities because they're mapped to other, primitive capabilities
+	 * before they're checked. We can't reliably predict which primitive capabilities will be used,
+	 * especially for other plugins, so enabling the primitive caps is not always an option.
+	 *
+	 * Instead, we use the "map_meta_cap" filter to map only the relevant meta capabilities back to
+	 * themselves. This way, setting a meta cap in the "user_has_cap" filter will work as expected.
+	 *
+	 * @param string[]|mixed $primitiveCaps
+	 * @param string|mixed $requiredCap
+	 * @param int|mixed $userId
+	 * @return string[]
+	 */
+	public function identity_map_meta_cap_for_user($primitiveCaps, $requiredCap = '', $userId = 0) {
+		if ( $this->disable_virtual_caps ) {
+			return $primitiveCaps;
+		}
+
+		//Sanity checks.
+		$userId = intval($userId);
+		if ( ($userId <= 0) || !is_string($requiredCap) || !is_array($primitiveCaps) ) {
+			return $primitiveCaps;
+		}
+
+		//Is the cap set for the user?
+		$virtualCapsForUser = $this->get_virtual_caps_for_user($userId);
+		if ( empty($virtualCapsForUser) || !isset($virtualCapsForUser[$requiredCap]) ) {
+			return $primitiveCaps;
+		}
+
+		//map_meta_cap() is called a lot, so let's cache the capability list.
+		if ( $this->cached_identity_mapped_caps === null ) {
+			$custom_menu = $this->load_custom_menu();
+			if (
+				!empty($custom_menu)
+				&& !empty($custom_menu['suspected_meta_caps'])
+				&& !$this->menu_structure_feature->isCustomizationDisabled()
+			) {
+				$this->cached_identity_mapped_caps = array_fill_keys($custom_menu['suspected_meta_caps'], true);
+			} else {
+				$this->cached_identity_mapped_caps = [];
+			}
+
+			//Exclude dangerous Super User capabilities; don't remap them.
+			$dangerousSuperAdminCaps = [
+				'create_sites'           => true,
+				'delete_sites'           => true,
+				'manage_network'         => true,
+				'manage_sites'           => true,
+				'manage_network_users'   => true,
+				'manage_network_plugins' => true,
+				'manage_network_themes'  => true,
+				'manage_network_options' => true,
+				'upgrade_network'        => true,
+				'setup_network'          => true,
+				'update_php'             => true,
+				'update_https'           => true,
+			];
+			$this->cached_identity_mapped_caps = array_diff_key(
+				$this->cached_identity_mapped_caps,
+				$dangerousSuperAdminCaps
+			);
+		}
+
+		if ( !empty($this->cached_identity_mapped_caps[$requiredCap]) ) {
+			//Just to be safe, let's not override "do_not_allow" results.
+			if ( ($requiredCap === 'do_not_allow') || in_array('do_not_allow', $primitiveCaps) ) {
+				return $primitiveCaps;
+			}
+
+			//Map the meta cap to itself.
+			return [$requiredCap];
+		}
+
+		return $primitiveCaps;
 	}
 
 	/**
@@ -3908,19 +5097,46 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 	}
 
 	/**
-	 * User metadata was updated or deleted; invalidate the role cache.
+	 * User metadata was updated or deleted; refresh or invalidate the associated role/capability caches.
 	 *
-	 * Not all metadata updates are related to role changes, but filtering them is non-trivial (meta keys change)
-	 * and not really necessary for our purposes.
+	 * Not all metadata updates are related to role changes, but filtering them is non-trivial (meta keys change).
 	 *
 	 * @param int|array $unused_meta_id
 	 * @param int $user_id
+	 * @param string $meta_key
+	 * @noinspection PhpUnusedParameterInspection
 	 */
-	public function clear_user_role_cache(/** @noinspection PhpUnusedParameterInspection */$unused_meta_id, $user_id) {
+	public function on_user_metadata_changed($unused_meta_id, $user_id, $meta_key) {
 		if ( empty($user_id) || !is_numeric($user_id) ) {
 			return;
 		}
+		//Clear the user role cache.
 		unset($this->cached_user_roles[$user_id]);
+
+		$this->virtual_caps_for_this_call = array();
+
+		//Did this update change user capabilities or roles? If so, refresh virtual caps.
+		$user = $this->get_user_by_id($user_id);
+		if ( empty($user) ) {
+			//This should never happen for a non-empty ID, but a user reported that it does
+			//on their site. Not clear why, did not investigate in detail.
+			return;
+		}
+		if ( $meta_key === $user->cap_key ) {
+			$this->update_virtual_cap_cache($user);
+		}
+	}
+
+	/**
+	 * Get the user object based on a user ID.
+	 *
+	 * Alias for ameRoleUtils::get_user_by_id().
+	 *
+	 * @param int $user_id
+	 * @return WP_User|null
+	 */
+	private function get_user_by_id($user_id) {
+		return ameRoleUtils::get_user_by_id($user_id);
 	}
 
 	/**
@@ -3935,7 +5151,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 		foreach($post_types as $id => $post_type) {
 			$title = $id;
-			if (isset($post_type->labels, $post_type->labels->name) && !empty($post_type->labels->name)) {
+			if ( isset($post_type->labels->name) && !empty($post_type->labels->name) ) {
 				$title = $post_type->labels->name;
 			}
 
@@ -3974,7 +5190,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 		foreach($taxonomies as $id => $taxonomy) {
 			$title = $id;
-			if (isset($taxonomy->labels, $taxonomy->labels->name) && !empty($taxonomy->labels->name)) {
+			if ( isset($taxonomy->labels->name) && !empty($taxonomy->labels->name) ) {
 				$title = $taxonomy->labels->name;
 			}
 
@@ -4012,6 +5228,7 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 		//Disable the notice when the user hides it or visits any of our admin pages.
 		$hideNoticeParameter = 'ame-plugin-menu-notice';
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Just hiding an optional help message.
 		if ( !empty($_GET[$hideNoticeParameter]) || $this->is_editor_page() || $this->is_settings_page() ) {
 			$this->options['show_plugin_menu_notice'] = false;
 			$this->save_options();
@@ -4022,18 +5239,25 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 		$dismissUrl = remove_query_arg(array('message', 'activate'), $dismissUrl);
 
 		if ( is_multisite() && is_network_admin() ) {
-			$message = 'Tip: Go to any subsite to access Admin Menu Editor. It will not show up in the network admin.';
+			if ( $this->is_pro_version() ) {
+				$message = 'Tip: Go to any subsite to edit the regular admin menu. Or go to <a href="%1$s">Settings -&gt; %2$s</a> '
+					. 'in the network admin to edit the network admin menu, roles, and so on.';
+			} else {
+				$message = 'Tip: Go to any subsite to access Admin Menu Editor. It will not show up in the network admin.';
+			}
 		} else {
 			$message = 'Tip: Go to <a href="%1$s">Settings -&gt; %2$s</a> to start customizing the admin menu.';
 		}
 		printf(
+			//phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $message can be a HTML template.
 			'<div class="updated" id="ame-plugin-menu-notice">
 				<p>' . $message . '</p>
 				<p><a href="%3$s" id="ame-hide-plugin-menu-notice">Hide this message</a></p>
 			 </div>',
-			esc_attr(admin_url($this->settings_link)),
-			apply_filters('admin_menu_editor-self_menu_title', 'Menu Editor'),
-			esc_attr($dismissUrl)
+			//phpcs:enable
+			esc_url(self_admin_url($this->settings_link)),
+			esc_html(apply_filters('admin_menu_editor-self_menu_title', 'Menu Editor')),
+			esc_url($dismissUrl)
 		);
 
 	}
@@ -4065,11 +5289,16 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 		$power_filename = AME_ROOT_DIR . '/includes/capabilities/cap-power.csv';
 		if ( is_file($power_filename) && is_readable($power_filename) ) {
+			//phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Should be fine, we only need read permissions.
 			$csv = fopen($power_filename, 'r');
 			$firstLineSkipped = false;
 
+			//$escape should be an empty string since it's deprecated in modern PHP versions,
+			//but versions older than PHP 7.4 require it to be a character (i.e. non-empty string).
+			$escape = version_compare(phpversion(), '7.4', '>=') ? '' : '\\';
+
 			while ($csv && !feof($csv)) {
-				$line = fgetcsv($csv, 1000, ';');
+				$line = fgetcsv($csv, 1000, ';', '"', $escape);
 				if ( !$firstLineSkipped ) {
 					$firstLineSkipped = true;
 					continue;
@@ -4141,6 +5370,23 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 				'requiredPhpVersion' => '5.3',
 				'title' => 'Dashboard Widgets',
 			),
+			'nav-menu-visibility' => array(
+				'relativePath' => 'extras/modules/nav-menu-visibility/nav-menu-visibility.php',
+				'className' => '\\YahnisElsts\\AdminMenuEditor\\NavMenuVisibility\\NavMenuModule',
+				'title' => 'Navigation Menu Visibility',
+			),
+			'table-columns' => [
+				'relativePath'       => 'extras/modules/table-columns/TableColumnsModule.php',
+				'className'          => '\\YahnisElsts\\AdminMenuEditor\\TableColumns\\TableColumnsModule',
+				'title'              => 'Table Elements',
+				'requiredPhpVersion' => '7.4',
+			],
+			'redirector' => array(
+				'relativePath' => 'modules/redirector/redirector.php',
+				'className'    => '\\YahnisElsts\\AdminMenuEditor\\Redirects\\Module',
+				'title'        => 'Redirects',
+				'requiredPhpVersion' => '5.6.20', //Same as WP 5.8.
+			),
 			'plugin-visibility' => array(
 				'relativePath' => 'modules/plugin-visibility/plugin-visibility.php',
 				'className' => 'amePluginVisibility',
@@ -4156,11 +5402,6 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 				'className' => 'ameAdminCss',
 				'title' => 'Admin CSS',
 			),*/
-			/*'tweaks' => array(
-				'relativePath' => 'modules/tweaks/tweaks.php',
-				'className' => 'ameTweakManager',
-				'title' => 'Tweaks',
-			),*/
 			'hide-admin-menu' => array(
 				'relativePath' => 'extras/modules/hide-admin-menu/hide-admin-menu.php',
 				'className' => 'ameAdminMenuHider',
@@ -4171,12 +5412,31 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 				'className' => 'ameAdminBarHider',
 				'title' => '"Show the Toolbar" checkbox',
 			),
+			'easy-hide' => array(
+				'relativePath' => 'extras/modules/easy-hide/easy-hide.php',
+				'className'    => '\\YahnisElsts\\AdminMenuEditor\\EasyHide\\Core',
+				'title'        => 'Easy Hide',
+				'requiredPhpVersion' => '5.6.20',
+				'requiredMethods' => array(array('WP_Error', 'merge_from')),
+			),
+			'quick-search' => [
+				'relativePath'       => 'extras/modules/quick-search/quick-search.php',
+				'className'          => '\\YahnisElsts\\AdminMenuEditor\\QuickSearch\\SearchModule',
+				'title'              => 'Quick Search',
+				'requiredPhpVersion' => '5.6.20',
+			],
 			'highlight-new-menus' => array(
 				'relativePath' => 'modules/highlight-new-menus/highlight-new-menus.php',
 				'className' => 'ameMenuHighlighterWrapper',
 				'title' => 'Highlight new menu items',
 				'requiredPhpVersion' => '5.3',
 			),
+			'content-permission' => [
+				'relativePath'       => 'modules/content-permissions/content-permissions.php',
+				'className'          => '\\YahnisElsts\\AdminMenuEditor\\ContentPermissions\\ContentPermissionsModule',
+				'title'              => 'Content Permissions',
+				'requiredPhpVersion' => '7.1.0', //This module indirectly uses is_iterable() via customizables.
+			],
 		);
 
 		foreach($modules as &$module) {
@@ -4199,7 +5459,16 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 
 	public function is_module_compatible($module) {
 		if ( !empty($module['requiredPhpVersion']) ) {
-			return version_compare(phpversion(), $module['requiredPhpVersion'], '>=');
+			if ( !version_compare(phpversion(), $module['requiredPhpVersion'], '>=') ) {
+				return false;
+			}
+		}
+		if ( !empty($module['requiredMethods']) ) {
+			foreach ($module['requiredMethods'] as $item) {
+				if ( !method_exists($item[0], $item[1]) ) {
+					return false;
+				}
+			}
 		}
 		return true;
 	}
@@ -4215,6 +5484,271 @@ class WPMenuEditor extends MenuEd_ShadowPluginFramework {
 			return $this->options['is_active_module'][$id];
 		}
 		return true;
+	}
+
+	/**
+	 * @return bool
+	 */
+	public function is_custom_menu_deep() {
+		return $this->custom_menu_is_deep;
+	}
+
+	/**
+	 * @param \YahnisElsts\AdminMenuEditor\EasyHide\HideableItemStore $store
+	 * @return void
+	 */
+	public function register_hideable_items($store) {
+		try {
+			$tree = $this->get_active_admin_menu_tree();
+			if ( empty($tree) ) {
+				return;
+			}
+		} catch (LogicException $ex) {
+			//This should never happen because the hiding module should
+			//run after the menu is done, but let's not crash if it happens.
+			return;
+		}
+
+		$cat = $store->getOrCreateCategory(
+			'admin-menu',
+			'Admin Menu',
+			null,
+			true
+		);
+
+		$this->register_menus_as_hideable($store, $tree, null, 1, $cat);
+
+		//Also, register visible components.
+		//The word "component" is used in at least two distinct senses here, which is not ideal.
+		$componentsByItemId = apply_filters('admin_menu_editor-hideable_vis_components', array());
+		$menuConfig = $this->load_custom_menu($this->loaded_menu_config_id);
+		foreach($componentsByItemId as $itemId => $properties) {
+			$store->addItem(
+				$itemId,
+				$properties['label'],
+				array($store->getOrCreateCategory(
+					'admin-ui',
+					'General',
+					null,
+					true
+				)->setSortPriority(1)),
+				null,
+				ameUtils::get($menuConfig, array('component_visibility', $properties['component']), array()),
+				'admin-menu'
+			);
+		}
+	}
+
+	/**
+	 * @param \YahnisElsts\AdminMenuEditor\EasyHide\HideableItemStore $store
+	 * @param array[] $menus
+	 */
+	private function register_menus_as_hideable(
+		$store,
+		$menus,
+		$parent,
+		$level,
+		$category
+	) {
+		foreach ($menus as $key => $item) {
+			$id = $this->make_hideable_item_id($item, $level);
+
+			$label = ameMenuItem::get($item, 'menu_title', '');
+			if ( $label !== '' ) {
+				$label = trim(wp_strip_all_tags(ameMenuItem::remove_update_count($label)));
+			} else {
+				$label = '[' . $key . ']';
+			}
+
+			$hideableItem = $store->addItem(
+				$id,
+				$label,
+				array($category),
+				$parent,
+				$item['grant_access'] ?? array(),
+				'admin-menu'
+			);
+
+			if ( !empty($item['items']) ) {
+				$this->register_menus_as_hideable(
+					$store,
+					$item['items'],
+					$hideableItem,
+					$level + 1,
+					$category
+				);
+			}
+		}
+	}
+
+	/**
+	 * @param array $errors
+	 * @param array $items
+	 * @return array
+	 */
+	public function save_hideable_items($errors, $items) {
+		try {
+			$tree = $this->get_active_admin_menu_tree();
+			if ( empty($tree) ) {
+				return $errors;
+			}
+		} catch (LogicException $ex) {
+			$errors[] = new WP_Error('no_admin_menu', 'Admin menu configuration is not initialised yet.');
+			return $errors;
+		}
+
+		$hasChanged = $this->update_hideable_menu_items($items, $tree, 1);
+
+		$menuConfig = $this->load_custom_menu($this->loaded_menu_config_id);
+		if ( empty($menuConfig) ) {
+			$menuConfig = ameMenu::new_empty_config();
+		}
+		if ( $hasChanged ) {
+			$menuConfig['tree'] = $tree;
+		}
+
+		//Update component visibility. It's more efficient to do it here because we
+		//don't need to re-save the whole menu configuration multiple times.
+		if ( !isset($menuConfig['component_visibility']) ) {
+			$menuConfig['component_visibility'] = array();
+		}
+		$componentsByItemId = apply_filters('admin_menu_editor-hideable_vis_components', array());
+
+		foreach($componentsByItemId as $itemId => $properties) {
+			$component = $properties['component'];
+			if ( isset($items[$itemId]) ) {
+				$enabled = ameUtils::get($items[$itemId], 'enabled', array());
+				$oldAccess = ameUtils::get($menuConfig, array('component_visibility', $component), array());
+				if ( !ameUtils::areAssocArraysEqual($enabled, $oldAccess) ) {
+					$menuConfig['component_visibility'][$component] = $enabled;
+					$hasChanged = true;
+				}
+			}
+		}
+
+		if ( $hasChanged ) {
+			if ( !$this->set_custom_menu($menuConfig) ) {
+				$errors[] = new WP_Error('menu_update_failed', 'Failed to save the admin menu.');
+			}
+		}
+
+		return $errors;
+	}
+
+	private function update_hideable_menu_items($hideableItems, &$menus, $level) {
+		$hasChanged = false;
+
+		$isNotTrue = function($value) {
+			return ($value !== true);
+		};
+
+		//Iterate over all admin menus and find the corresponding hideable items.
+		//We could do it the other way around, but parsing IDs is more complex.
+		foreach ($menus as &$menuItem) {
+			$id = $this->make_hideable_item_id($menuItem, $level);
+			if ( isset($hideableItems[$id]) ) {
+				$settings = $hideableItems[$id];
+				$newAccess = !empty($settings['enabled']) ? $settings['enabled'] : array();
+				$oldAccess = $menuItem['grant_access'] ?? array();
+
+				//Easy Hide cannot explicitly enable access to menu items. This is to prevent a bug
+				//where a user might unintentionally grant a role access by checking and then unchecking
+				//an item. Therefore, throw away any "true" values in the new list.
+				$newAccess = array_filter($newAccess, $isNotTrue);
+
+				//Easy Hide also shouldn't overwrite existing "true" values with "null". While these
+				//are often equivalent, "true" has a special meaning in the menu editor (explicitly enabled),
+				//and losing that setting can cause confusion.
+				foreach($oldAccess as $key => $value) {
+					if ( ($value === true) && !isset($newAccess[$key]) ) {
+						$newAccess[$key] = true;
+					}
+				}
+
+				$changes1 = array_diff_assoc($oldAccess, $newAccess);
+				$changes2 = array_diff_assoc($newAccess, $oldAccess);
+
+				if ( !empty($changes1) || !empty($changes2) ) {
+					$menuItem['grant_access'] = $newAccess;
+					$hasChanged = true;
+				}
+			}
+
+			if ( !empty($menuItem['items']) ) {
+				$submenusChanged = $this->update_hideable_menu_items(
+					$hideableItems,
+					$menuItem['items'],
+					$level + 1
+				);
+				$hasChanged = $hasChanged || $submenusChanged;
+			}
+		}
+		unset($menuItem); //Not strictly necessary. Just guarding against future bugs.
+
+		return $hasChanged;
+	}
+
+	private function make_hideable_item_id($menuItem, $level) {
+		$templateId = ameMenuItem::template_id($menuItem);
+		if ( !empty($templateId) ) {
+			$suffix = 't/' . $templateId;
+		} else {
+			$suffix = 'u/' . ameMenuItem::get($menuItem, 'file', '');
+		}
+		return 'am/' . $level . '/' . $suffix;
+	}
+
+	public function get_webpack_registry() {
+		if ( !isset($this->webpack_registry) ) {
+			if ( class_exists(WebpackAssetRegistry::class) ) {
+				$this->webpack_registry = new WebpackAssetRegistry(
+					AME_ROOT_DIR . '/dist/build.manifest.json',
+					AME_ROOT_DIR . '/dist'
+				);
+			}
+		}
+
+		return $this->webpack_registry;
+	}
+
+	/**
+	 * @var array<string,bool>
+	 */
+	private $customizations_disabled_state = [];
+
+	/**
+	 * Check if a specific customization is disabled for the current user.
+	 *
+	 * For example, disabling admin menu customizations means that the user will see the default,
+	 * unmodified admin menu. Customizations like hiding menu items, changing item order, and so on
+	 * will not be applied.
+	 *
+	 * Note that this does not, by itself, prevent the user from *editing* customization settings.
+	 * It only prevents the customizations from being applied. The user can still change AME settings
+	 * if they have the necessary permissions.
+	 *
+	 * @param string $component
+	 * @return bool
+	 */
+	public function is_customization_disabled($component) {
+		if ( empty($component) ) {
+			throw new InvalidArgumentException('Component name must not be empty.');
+		}
+
+		if ( isset($this->customizations_disabled_state[$component]) ) {
+			return $this->customizations_disabled_state[$component];
+		}
+
+		$disabled = (bool)apply_filters('admin_menu_editor-disable_customizations-' . $component, false);
+
+		//Usually, the state depends on the user and/or their role, so let's cache the result
+		//only if a user is logged in. This probably won't come up much in practice since
+		//current modules should only call this method after the logged-in user is known.
+		if ( function_exists('is_user_logged_in') && is_user_logged_in() ) {
+			$this->customizations_disabled_state[$component] = $disabled;
+		}
+
+		return $disabled;
 	}
 
 } //class
@@ -4244,6 +5778,10 @@ class ameMenuTemplateBuilder {
 		$this->blacklist = $blacklist;
 
 		if ( !empty($menu) ) {
+			if ( !is_array($menu) && ($menu instanceof Traversable) ) {
+				$menu = iterator_to_array($menu);
+			}
+
 			//At this point, the menu might not be sorted yet, especially if other plugins have made changes to it.
 			//We need to know the relative order of menus to insert new items in the right place.
 			ksort($menu, SORT_NUMERIC);
@@ -4287,6 +5825,11 @@ class ameMenuTemplateBuilder {
 	 * @param string|null $parent
 	 */
 	private function addItem($wpItem, $position, $parent = null) {
+		//The item should always be array-like.
+		if ( !is_array($wpItem) && !($wpItem instanceof ArrayAccess) ) {
+			return;
+		}
+
 		$item = ameMenuItem::fromWpItem($wpItem, $position, $parent);
 
 		//Skip separators.
@@ -4298,10 +5841,15 @@ class ameMenuTemplateBuilder {
 		//Skip blacklisted menus.
 		//BUG: We shouldn't skip top level menus that have non-blacklisted submenu items.
 		if ( isset($item['url'], $this->blacklist[$item['url']]) ) {
-			return;
+			$filter = $this->blacklist[$item['url']];
+			if ( $filter === true ) {
+				return;
+			} else if ( ($filter === 'submenu') && ($parent !== null) ) {
+				return;
+			}
 		}
 
-		$name = $this->sanitizeMenuTitle($item['menu_title']);
+		$name = self::sanitizeMenuTitle($item['menu_title']);
 		if ( $parent === null ) {
 			$this->parentNames[$item['file']] = $name;
 		} else {
@@ -4333,8 +5881,8 @@ class ameMenuTemplateBuilder {
 	 * @param string $title
 	 * @return string
 	 */
-	private function sanitizeMenuTitle($title) {
-		$title = strip_tags( preg_replace('@<span[^>]*>.*</span>@i', '', $title) );
+	public static function sanitizeMenuTitle($title) {
+		$title = wp_strip_all_tags( preg_replace('@<span[^>]*>.*</span>@i', '', $title) );
 
 		//Compact whitespace.
 		$title = rtrim(preg_replace('@[\s\t\r\n]+@', ' ', $title));
