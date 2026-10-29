@@ -1,0 +1,890 @@
+@charset "UTF-8";
+
+.sp {
+  display: none;
+}
+
+.pc {
+  display: block;
+}
+@media all and (max-width: 1205px) {
+/*----------------------------------------------------------------------
+  header
+----------------------------------------------------------------------*/
+header nav {
+	display:none;
+	position:fixed;
+	top:0;
+	left:0;
+	width:100vw;
+	height:100vh;
+	background:rgba(255,255,255,0.95);
+	z-index:9;
+}
+
+header nav ul {
+	position:absolute;
+	top:50%;
+	left:50%;
+	transform:translate(-50%,-50%);
+}
+
+header nav li {
+	float:none;
+	text-align:center;
+	margin:30px 0!important;
+}
+
+.menubtn {
+	position:absolute;
+	right:5%;
+	top:25px;
+	z-index:10;
+	width:50px;
+	height:32px;
+	cursor:pointer;
+}
+
+.menubtn.open {
+	position:fixed;
+}
+
+.menubtn span {
+	position:absolute;
+	width:100%;
+	height:3px;
+	background:#d81405;
+	transition:0.3s;
+	-webkit-transition:0.3s;
+	-moz-transition:0.3s;
+}
+
+.menubtn span.top {
+	top:0;
+}
+
+.menubtn span.middle {
+	top:50%;
+	transform:translateY(-50%);
+	-webkit-transform:translateY(-50%);
+	-moz-transform:translateY(-50%);
+}
+
+.menubtn span.bottom {
+	bottom:0;
+}
+
+.menubtn span.menuclick1 {
+	-webkit-transform:translateY(15px) rotate(-315deg);
+	transform:translateY(15px) rotate(-315deg);
+}
+
+.menubtn span.menuclick2 {
+	background-color:transparent;
+}
+
+.menubtn span.menuclick3 {
+	-webkit-transform:translateY(-15px) rotate(315deg);
+	transform:translateY(-15px) rotate(315deg);
+}
+
+/*common*/
+div:not(#index) .main img {
+	margin-top:0;
+}
+
+div:not(#index) .main .title {
+	width:100%;
+	margin-top:0;
+	padding:30px 50px;
+	float:none;
+}
+
+div:not(#index) .main .title h1 {
+	font-size:40px;
+}
+
+div:not(#index) .main .title p {
+	font-size:20px;
+}
+
+div:not(#index) .main .pan {
+	width:100%;
+	padding:0 50px;
+	float:none;
+	overflow:hidden;
+}
+
+div:not(#index) .content > div:first-of-type {
+	width:90%;
+	margin:0 auto;
+}
+}
+
+@media all and (max-width: 1024px) {
+	.sp {
+		display:block;
+	}
+  .pc {
+    display: none;
+  }
+
+
+/*----------------------------------------------------------------------
+  index
+----------------------------------------------------------------------*/
+#index .main .mainTitle {
+	width:80%;
+	margin-top:10%;
+}
+
+#index .main .mainslide {
+	margin-top:0;
+}
+
+#index .wo_re .work,
+#index .wo_re .recruit {
+	width:100%;
+	padding-top:50px;
+}
+
+#index h2 {
+	font-size:40px;
+}
+
+#index h2::after {
+	margin:20px auto 40px;
+}
+
+#index h3 {
+	font-size:30px;
+}
+
+#index .about {
+	padding:50px 0;
+}
+
+#index .quality div {
+	padding:50px 0;
+}
+
+#index .quality div img {
+	height:220px;
+}
+
+#index .quality div p {
+	width:90%;
+}
+
+#index .machine {
+	overflow:hidden;
+}
+
+#index .machine div {
+	margin:50px auto;
+}
+
+#index .machine img {
+	width:auto;
+	height:520px;
+	position:relative;
+	left:50%;
+	transform:translateX(-50%);
+}
+
+#index .news {
+	padding:50px 0;
+}
+
+#index .news div {
+	width:100%;
+	float:none;
+}
+
+#index .news ul li a,
+#news .newslist ul li a {
+	padding:20px 40px 20px 20px;
+}
+
+#index .news ul li span,
+#news .newslist ul li span {
+	margin-bottom: 10px;
+}
+
+#index .news ul li::after,
+#news .newslist ul li::after {
+	right:12px;
+}
+
+#index .news ul li:hover::after,
+#news .newslist ul li:hover::after {
+	right:6px;
+}
+
+#index .news a.more.sp {
+	display:block;
+}
+
+#index .access .map {
+	width:100%;
+	float:none;
+	height:380px;
+}
+
+#index .access .map iframe {
+	height:680px;
+}
+
+#index .access div:not(.map) {
+	width:100%;
+	float:none;
+	padding:50px 0;
+}
+
+/*----------------------------------------------------------------------
+  about
+----------------------------------------------------------------------*/
+#about h2 {
+	font-size:20px;
+}
+
+#about h2 br.sp {
+	display:none;
+}
+
+#about .content .box {
+	width:100%;
+}
+
+#about .box ul {
+	display:block;
+}
+
+#about .box li {
+	width:100%;
+	clear:both;
+	padding:50px 0 130px;
+}
+
+#about .box li img {
+	float:left;
+	height:250px;
+	margin-left:50px;
+}
+
+#about .content p {
+	font-size:14px;
+}
+
+/*----------------------------------------------------------------------
+  company
+----------------------------------------------------------------------*/
+#company .company ul li {
+	margin:0 10px 20px 0;
+}
+
+#company .company ul li:nth-child(-n+3) {
+	width:calc((100% - 20.01px) / 3);
+}
+
+#company .company ul li:nth-child(n+4) {
+	width:calc((100% - 10.01px) / 2);
+}
+
+/*profile*/
+#company h2 {
+	margin:0 0 50px;
+	font-size:20px;
+}
+
+#company .profile div {
+	margin:0 0 50px;
+}
+
+#company table {
+	width:100%;
+	margin-left:0;
+}
+
+#company table tr.employee td {
+	padding:20px 0 20px 20px;
+}
+
+#company table tr.employee td:first-child {
+	width:6em;
+}
+
+/*message*/
+#company .message {
+	margin-left:0;
+}
+
+#company .message img {
+	float:none;
+	width:100%;
+}
+
+#company .message h3 {
+	font-size:20px;
+	line-height:1.6;
+	width:100%;
+}
+
+#company .message p {
+	width:100%;
+}
+
+/*philosophy*/
+#company .phi {
+	margin:0;
+	padding:20px;
+}
+
+/*access*/
+#company .access .map {
+	margin:0;
+	width:100%;
+	float:none;
+}
+
+#company .access p {
+	width:100%;
+	height:auto;
+	padding:20px;
+	float:none;
+	margin-bottom:50px;
+}
+
+/*----------------------------------------------------------------------
+  machine
+----------------------------------------------------------------------*/
+#machine .content h2 {
+	font-size:20px;
+}
+
+#machine .box {
+	width:100%;
+	margin-bottom:100px;
+}
+
+#machine div p + img:not(.map) {
+	float:none;
+	width:80%;
+}
+
+#machine .content table {
+	float:none;
+	max-width:none;
+}
+
+#machine .content div ul li {
+	width:calc(50% - 25px);
+	margin:0 50px 50px 0;
+}
+
+#machine .content div ul li:nth-child(2n) {
+	margin-right:0;
+}
+
+#machine .box .tablewrap table td {
+	padding:10px;
+}
+
+
+
+/*----------------------------------------------------------------------
+  work
+----------------------------------------------------------------------*/
+#work .worklist ul {
+	width:100%;
+}
+
+#work .worklist li {
+	margin:0 20px 50px 0;
+	width:calc((100% - 40px) /3);
+}
+
+#work .worklist li span {
+	font-size:16px;
+}
+
+/*detail*/
+#work .workdetail .dlwrap {
+	width:100%;
+	padding:20px;
+}
+
+#work .workdetail dl {
+	margin-bottom:30px;
+}
+
+#work .workdetail img {
+	top:auto;
+	bottom:70px;
+	left:auto;
+	right:20px;
+	max-width:50%;
+	max-height:350px;
+}
+
+/*----------------------------------------------------------------------
+  news
+----------------------------------------------------------------------*/
+#news .newslist ul {
+	width:100%;
+}
+
+#news .newsdetail .box {
+	width:100%;
+	padding:20px 20px 50px;
+}
+
+#news .newsdetail .box .title {
+	font-size:18px;
+}
+
+/*----------------------------------------------------------------------
+  contact
+----------------------------------------------------------------------*/
+#contact form {
+	width:100%;
+	padding:20px;
+}
+
+#contact table {
+	width:100%;
+}
+
+#contact table td {
+	width:480px;
+}
+
+#contact input,
+#contact textarea {
+	width:100%;
+}
+
+/*----------------------------------------------------------------------
+  footer
+----------------------------------------------------------------------*/
+footer {
+	padding:50px 0;
+}
+
+footer ul {
+	float:none;
+	width:680px;
+	margin:0 auto 30px;
+	overflow:hidden;
+}
+
+footer ul li {
+	margin-right:40px;
+}
+
+footer ul ul {
+	width:auto;
+}
+
+footer .co_re {
+	float:none;
+	width:680px;
+	margin:0 auto;
+}
+
+}
+
+@media all and (max-width: 768px) and (min-width: 701px) {
+	#machine .box .tablewrap {
+		float:none;
+		overflow:hidden;
+	}
+	
+	#machine .box .tablewrap table:first-child {
+		float:left;
+	}
+	
+	#machine .box .tablewrap table:nth-child(2) {
+		float:right;
+	}
+	
+	#machine .content img.map {
+		max-width:100%;
+	}
+}
+
+@media all and (max-width: 700px) {
+	#machine .box .tablewrap {
+		float:none;
+	}
+
+	#machine .content img.map {
+		max-width:100%;
+	}
+}
+
+@media all and (max-width: 425px) {
+	body {
+		font-size:14px;
+	}
+	
+	header .logo {
+		width:80%;
+	}
+	
+	header .logo img {
+		width:100%;
+	}
+	
+	.menubtn {
+		width:10%;
+		height:22px;
+		top:22px;
+	}
+	
+	.menubtn span {
+		height:2px;
+	}
+	
+	.menubtn span.menuclick1 {
+		-webkit-transform:translateY(10px) rotate(-315deg);
+		transform:translateY(10px) rotate(-315deg);
+	}
+	
+	.menubtn span.menuclick3 {
+		-webkit-transform:translateY(-10px) rotate(315deg);
+		transform:translateY(-10px) rotate(315deg);
+	}
+	
+	/*---------------------------content-----------------------------*/
+	div:not(#index) .main .title {
+		padding:10px;
+	}
+	
+	div:not(#index) .main .title h1 {
+		font-size:26px;
+	}
+	
+	div:not(#index) .main .title h1 span {
+		font-size:16px;
+	}
+	
+	div:not(#index) .main .title p {
+		font-size:4.3vw;
+	}
+	
+	div:not(#index) .main .pan {
+		padding: 0 10px;
+	}
+	
+	#index .main p.ta-center {
+		font-size:14px;
+	}
+	
+	#index h2 {
+		font-size:30px;
+	}
+	
+	#index h3 {
+		font-size:4.5vw;
+		font-weight:bold;
+	}
+	
+	#index .wo_re .work .workslide .slick-prev {
+		left:-30px;
+	}
+	
+	#index .wo_re .work .workslide .slick-next {
+		right:-30px;
+	}
+	
+	#index .wo_re .work .workslide .slick-prev::before,
+	#index .wo_re .work .workslide .slick-next::before {
+		font-size:30px;
+	}
+	
+	#index .wo_re .work .workslide li span {
+		font-size:18px;
+	}
+	
+	#index .about p {
+		width:90%;
+	}
+	
+	#index .quality div {
+		width:100%;
+	}
+	
+	#index .quality h3 {
+		font-size:30px;
+		font-weight:normal;
+	}
+	
+	#index .machine img {
+		height:450px;
+	}
+	
+	#about h2 br.sp {
+		display:block;
+	}
+	
+	#about .box li {
+		padding:50px 0;
+	}
+	
+	#about .box li img {
+		float:none;
+		margin:0;
+		height:200px;
+	}
+	
+	#about .content p {
+		text-align:left;
+	}
+	
+	#about .box.flow img {
+		width:106%;
+		max-width:none;
+		margin-left:-3%;
+	}
+	
+	#company .company ul li {
+		margin:0 auto 30px!important;
+		width:100%!important;
+		max-width:550px;
+		float:none;
+	}
+	
+	#company .company ul li a span {
+		font-size:18px;
+	}
+	
+	#company table th,
+	#company table td {
+		display:block;
+		width:100%;
+	}
+	
+	#company table th {
+		padding:10px;
+		border:none;
+		text-align:left;
+	}
+	
+	#company table td {
+		padding:20px 10px;
+	}
+	
+	#company table td a {
+		margin:10px 0 0;
+		display:block;
+		width:80px;
+	}
+	
+	#company table tr.employee {
+		border-left:solid 1px #AAA;
+		font-size:13px;
+	}
+	
+	#company table tr.employee td {
+		padding:10px;
+	}
+	
+	#company table tr.employee td:first-child {
+		width:100%;
+	}
+	
+	#company table tr.employee td:nth-child(2) {
+		width:calc(100% - 4em);
+		float:left;
+		padding-bottom:20px;
+	}
+	
+	#company table tr.employee td:last-child {
+		width:4em;
+		float:left;
+		padding-bottom:20px;
+	}
+	
+	#company .content .profile div img {
+		width:100%;
+		max-width:456px;
+	}
+	
+	#company .message h3 {
+		font-size:15px;
+	}
+	
+	#company .message p {
+		line-height:2;
+	}
+	
+	#machine .box .tablescroll {
+		overflow:auto;
+		white-space:nowrap;
+	}
+	
+	.tablescroll::-webkit-scrollbar{height:8px;}
+	.tablescroll::-webkit-scrollbar-track{background:#f1f1f1;}
+	.tablescroll::-webkit-scrollbar-thumb{background:#ccc;}
+	.tablescroll::after{
+		content:'横にスクロールできます。';
+		font-size:12px;
+		color:#555;
+	}
+	
+	#machine .box .tablewrap .tablescroll::after {
+		display:none;
+	}
+	
+	#machine .content table {
+		margin-bottom:10px;
+	}
+
+	#machine .content div ul li {
+		width:100%;
+		margin-right:0;
+	}
+	
+	#machine .box .tablewrap {
+		float:none;
+		display:block;
+	}
+	
+	#machine .box .tablewrap table {
+		width:288px;
+	}
+	
+	#machine .box .tablewrap table td {
+		padding:10px 20px;
+	}
+	
+	#machine .box .tablewrap .tablescroll table {
+		margin-bottom:10px;
+	}
+	
+	#machine .content img.map {
+		width:200%;
+		max-width:none;
+		margin-top:30px;
+	}
+	
+	#work .worklist li {
+		margin:0 0 30px;
+		width:100%;
+	}
+	
+	#work .worklist li:nth-child(3n) {
+		margin-right:0%;
+	}
+	
+	#work .worklist li span {
+		font-size:14px;
+	}
+	
+	#work .workdetail .dlwrap {
+		padding:30px 20px;
+	}
+	
+	#work .workdetail dd.name p {
+		font-size:16px;
+	}
+	
+	#work .workdetail img {
+		right:10px;
+		bottom:60px;
+	}
+	
+	#work .pic li {
+		width:100%;
+		margin:0 0 20px;
+	}
+	
+	#contact table th,
+	#contact table td {
+		display:block;
+		padding:10px 0;
+		width:100%;
+	}
+	#contact .button {
+		flex-direction:column-reverse;
+	}
+	
+	#contact .button input,
+	#contact .mw_wp_form_confirm .button button {
+		margin:0 auto;
+	}
+	
+	/*conf*/
+	#contact .mw_wp_form_confirm .button input {
+		margin:30px auto 0;
+	}
+	/*sent*/
+	#contact .mw_wp_form_complete {
+		text-align:left;
+	}
+	
+	#contact .mw_wp_form_complete h2 {
+		font-size:15px;
+	}
+	
+	/*--------------------------footer---------------------------*/
+	footer ul {
+		width:auto;
+	}
+	
+	footer ul li {
+		float:none;
+		margin:0 0 30px;
+	}
+	
+	footer ul ul li {
+		margin:1em 0 0 18px;
+	}
+	
+	footer .co_re {
+		width:auto;
+	}
+	
+	footer .co_re div {
+		float:none;
+		margin:0 auto;
+	}
+	
+	footer .co_re p {
+		margin:30px 0 10px;
+		font-size:18px;
+	}
+	
+	footer .co_re a.mail {
+		margin:10px auto 30px;
+		width:100%;
+		max-width:300px;
+	}
+	
+	footer .co_re div a img {
+		width:100%;
+		max-width:300px;
+	}
+	
+	footer .logo img {
+		width:100%;
+	}
+	
+	footer .pagetop {
+		float:none;
+		overflow:hidden;
+		margin:70px auto 30px;
+	}
+	
+	footer p.add_copy {
+		text-align:center;
+		font-size:13px;
+	}
+	
+	footer p.add_copy span.copy {
+		float:none;
+		display:block;
+	}
+
+}

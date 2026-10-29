@@ -1,0 +1,90 @@
+<?php get_header(); ?>
+<div id="mainVisual">
+  <div class="slide">
+    <ul>
+      <li><img src="<?php echo get_template_directory_uri(); ?>/common/image/slide-01.png"></li>
+      <li><img src="<?php echo get_template_directory_uri(); ?>/common/image/slide-02.png"></li>
+      <li><img src="<?php echo get_template_directory_uri(); ?>/common/image/slide-03.png"></li>
+    </ul>
+  </div>
+  <div class="text">
+    <p><img src="<?php echo get_template_directory_uri(); ?>/common/image/slide_text.png" alt="LIVING WITH IRON　鉄とともに、生きる。暮らす。築いていく。"></p>
+  </div>
+  <div class="copy">
+    <p><img src="<?php echo get_template_directory_uri(); ?>/common/image/copy_left.png" alt="copyright(c) HIRANO IRON WORKS CO.,LTD."></p>
+  </div>
+  <div class="topics">
+    <div class="inner"><p>平野鐵工所 プロモーションムービー</p><a href="<?php echo home_url('/'); ?>/about/#about03">VIEW MORE</a></div>
+  </div>
+</div>
+<div id="indexQuality" class="indexCont">
+  <div class="illust"><div class="inner"><img src="<?php echo get_template_directory_uri(); ?>/common/image/illust-09.png"></div></div>
+  <div class="text"><p class="gradation">HIRANO<br>QUALITY</p><h2>平野クオリティ</h2>
+  <p><span class="beta">確かな技術と創意工夫を兼ね備え、</span><br><span class="beta">未来を築く設計施工</span></p>
+  <p class="mgn40">平野鐵工所は、鉄とともに暮らしを支え社会に貢献します。</p>
+  <a href="<?php echo home_url('/'); ?>about/" class="more-b">VIEW MORE</a>
+  </div>
+</div>
+<div id="indexNews" class="indexCont">
+  <div class="inner">
+  <p class="gradation"><span class="en">NEWS</span><span>お知らせ</span></p>
+  <?php $news_all = new WP_Query( array( 'post_type' => 'post', 'posts_per_page' => '3' ) ); ?>
+  <?php if ($news_all -> have_posts()): ?>
+  <ul>
+    <?php while ($news_all -> have_posts()) : $news_all -> the_post(); ?>
+      <?php
+            $categories = get_the_category();
+            $cat_name = $categories[0]->cat_name;
+            $cat_slug = $categories[0]->category_nicename;
+      ?>
+      <li id="post-<?php the_ID(); ?>">
+      <a href="<?php the_permalink(); ?>">
+        <?php if (has_post_thumbnail()): ?>
+          <?php the_post_thumbnail('newsthumb'); ?>
+        <?php else: ?>
+          <img src="<?php echo get_template_directory_uri(); ?>/common/image/noimage-01.png">
+        <?php endif; ?>
+        <div class="newsInfo">
+          <div class="cat"><?php echo $cat_name; ?></div>
+          <div class="date"><?php the_time('Y/m/d'); ?></div>
+        </div>
+        <p><?php the_title(); ?></p>
+      </a>
+    </li>
+    <?php endwhile; ?>
+  </ul>
+  <?php endif; ?>
+  <a href="<?php echo home_url('/'); ?>news/" class="more-b">VIEW MORE</a>
+  </div>
+</div>
+<div id="indexMenu">
+  <ul>
+    <li><a href="<?php echo home_url('/'); ?>machine/"><img src="<?php echo get_template_directory_uri(); ?>/common/image/menu_machine.png"><h2>MACHINE<span>設備機器</span></h2><div class="arrow"></div></a></li>
+    <li><a href="<?php echo home_url('/'); ?>work/"><img src="<?php echo get_template_directory_uri(); ?>/common/image/menu_work.png"><h2>WORK<span>施工実績</span></h2><div class="arrow"></div></a></li>
+  </ul>
+</div>
+<div id="indexRecruit" class="indexCont">
+  <div class="inner">
+    <div class="text"><p class="gradation"><span class="en">RECRUIT</span><span>採用情報</span></p>
+    <p>当社は1957年の創業以来、アイアンフレーム（鉄骨）の設計・施工ひと筋に歩み続けています。<br>私たちと共に成長してくれる仲間を待っています。</p>
+    <a href="<?php echo home_url('/'); ?>recruit/" class="more-b">VIEW MORE</a></div>
+    <div class="image"><img src="<?php echo get_template_directory_uri(); ?>/common/image/illust-07.png"></div>
+  </div>
+  <ul>
+    <li><a href="<?php echo home_url('/'); ?>recruit/profile/"><img src="<?php echo get_template_directory_uri(); ?>/common/image/rec_menu-01.png"><br>会社紹介</a></li>
+    <li><a href="<?php echo home_url('/'); ?>recruit/voice/"><img src="<?php echo get_template_directory_uri(); ?>/common/image/rec_menu-02.png"><br>先輩の声</a></li>
+    <li><a href="<?php echo home_url('/'); ?>recruit/requirements/"><img src="<?php echo get_template_directory_uri(); ?>/common/image/rec_menu-03.png"><br>募集要項</a></li>
+  </ul>
+</div>
+<div id="indexContact" class="indexCont">
+  <div class="inner">
+    <p class="gradation"><span class="en">CONTACT</span><span>お問い合わせ</span></p>
+    <p>ご相談・お見積もり依頼などお気軽にお問い合わせください。</p>
+    <div class="box">
+      <div class="tel"><a href="tel:0866822813"><span>TEL.</span>0866-82-2813</a><br>受付時間 / 土日・祝日を除く <br class="sp">月～金 9:00～16:00</div>
+      <div class="btn"><a href="<?php echo home_url('/'); ?>contact/">メールでのお問い合わせ</a></div>
+    </div>
+  </div>
+</div>
+
+<?php get_footer(); ?>

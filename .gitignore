@@ -1,0 +1,33 @@
+# Bỏ qua mọi thứ ở thư mục gốc (WordPress core, wp-config.php...)
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/wp-content/
+
+# Trong wp-content chỉ giữ theme, plugin, mu-plugins
+/wp-content/*
+!/wp-content/themes/
+!/wp-content/plugins/
+!/wp-content/mu-plugins/
+
+# Theme của site (gồm cả 2 theme cũ có trên production)
+/wp-content/themes/*
+!/wp-content/themes/official/
+!/wp-content/themes/_official/
+!/wp-content/themes/_recruit/
+
+# An toàn: không bao giờ commit dữ liệu
+*.sql
+*.wpress
+*.log
+Thumbs.db
+.DS_Store
+
+
+# Video và file media lớn: không đưa vào Git, triển khai riêng
+*.mp4
+*.mov
+*.webm
+*.avi
+*.zip

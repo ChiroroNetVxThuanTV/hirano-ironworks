@@ -1,0 +1,476 @@
+@charset "UTF-8";
+/*--------------------------------------------------------------------------------------------------
+
+second
+
+--------------------------------------------------------------------------------------------------*/
+.sp {
+  display: none;
+}
+
+.pc {
+  display: block;
+}
+
+@media all and (max-width: 1300px) {
+#voice .main div.name {
+	font-size:14px;
+	position:static;
+	display:flex;
+	margin-top:0;
+}
+
+#voice .main div.name div {
+	padding:20px 40px;
+	width:50%;
+}
+}
+
+@media all and (max-width: 1024px) {
+  .sp {
+    display: block;
+  }
+
+  .pc {
+    display: none;
+  }
+
+/*----------------------------------------------------------------------
+  header
+----------------------------------------------------------------------*/
+header {
+	height:110px;
+}
+
+header .logo {
+	top:25px;
+	left:40px;
+}
+
+header .logo img {
+	width:100%;
+}
+
+header .entry {
+	width:150px;
+	height:50px;
+	line-height:50px;
+	right:120px;
+}
+
+header ul {
+	padding-top:110px;
+}
+
+.menubtn {
+	top:35px;
+	right:40px;
+}
+
+/*common*/
+div.title h1 {
+	font-size:40px;
+}
+
+div:not(#voice) div.title + div,
+#voice .employee,
+#voice .content {
+	width:90%;
+}
+
+
+
+/*----------------------------------------------------------------------
+  index
+----------------------------------------------------------------------*/
+#index h2 {
+	font-size:40px;
+}
+
+#index h3::after {
+	margin:30px auto;
+}
+
+#index .concept {
+	overflow:hidden;
+}
+
+#index .concept img {
+	width:auto;
+	height:800px;
+	position:relative;
+	left:50%;
+	transform:translateX(-50%);
+}
+
+#index .concept .bg-H {
+	width:50%;
+	height:600px;
+}
+
+#index .concept .bg-H::before,
+#index .concept .bg-H::after {
+	width:40%;
+	right:-40%;
+}
+
+#index .concept .bg-H::before {
+	left:-40%;
+}
+
+#index .concept div.text {
+	width:90%;
+}
+
+#index .entry {
+	overflow:hidden;
+}
+
+#index .entry img {
+	width:auto;
+	height:470px;
+	position:relative;
+	left:50%;
+	transform:translateX(-50%);
+}
+
+/*----------------------------------------------------------------------
+  profile
+----------------------------------------------------------------------*/
+#profile .section {
+	margin:50px 0;
+}
+
+#profile .section1 div {
+	flex-wrap:wrap;
+}
+
+#profile .section dl {
+	width:48%;
+}
+
+#profile .section dd {
+	padding-bottom:100px;
+}
+
+#profile ul {
+	padding:10px 0 10px 30px;
+}
+
+#profile ul div {
+	width:100%;
+	float:none;
+}
+
+#profile ul div p {
+	margin-top:20px;
+}
+
+#profile li {
+	list-style-position:outside;
+}
+
+/*----------------------------------------------------------------------
+  voice
+----------------------------------------------------------------------*/
+#voice .employee {
+	margin-bottom:100px;
+}
+
+#voice .employee li div span:nth-child(2) {
+	font-size:18px;
+}
+
+#voice .main {
+	width:100%;
+}
+
+#voice .content .section {
+	padding-bottom:20px;
+	margin-bottom:50px;
+}
+
+#voice .content .section img,
+#voice .content .section div {
+	float:none;
+	margin:30px auto;
+	display:block;
+}
+
+/*----------------------------------------------------------------------
+  career
+----------------------------------------------------------------------*/
+#career table {
+	width:100%;
+}
+
+#career th {
+	padding-right:20px;
+}
+
+
+
+/*----------------------------------------------------------------------
+  entry
+----------------------------------------------------------------------*/
+#entry table {
+	width:100%;
+}
+
+#entry td {
+	width:520px;
+}
+
+/*----------------------------------------------------------------------
+  footer
+----------------------------------------------------------------------*/
+footer img.chara1,
+footer img.chara2 {
+	height:150px;
+	top:-150px;
+	right:30px;
+}
+
+footer img.chara1 {
+	left:30px;
+}
+
+
+}
+
+@media all and (max-width: 730px) {
+	header {
+		height:60px;
+	}
+	
+	header .logo {
+		top:18px;
+		left:10px;
+		width:50%;
+	}
+	
+	header .logo img {
+		width:100%;
+	}
+	
+	header .entry {
+		top:17px;
+		right:60px;
+		width:80px;
+		height:26px;
+		line-height:26px;
+	}
+	
+	.menubtn {
+		top:19px;
+		right:10px;
+		width:40px;
+		height:22px;
+	}
+	
+	.menubtn span.menuclick1 {
+		-webkit-transform:translateY(10px) rotate(-315deg);
+		transform:translateY(10px) rotate(-315deg);
+	}
+	
+	.menubtn span.menuclick3 {
+		-webkit-transform:translateY(-10px) rotate(315deg);
+		transform:translateY(-10px) rotate(315deg);
+	}
+	
+	header nav,
+	header ul {
+		width:100%;
+	}
+	
+	header nav {
+		right:-100%;
+	}
+	
+	header ul {
+		padding-top:60px;
+	}
+	
+	header ul li a {
+		padding:20px 10px;
+	}
+	
+}
+
+
+@media all and (max-width: 425px) {
+	body {
+		font-size:14px;
+	}
+	
+	a.more {
+		width:200px;
+		margin-top:30px;
+	}
+	
+	div.title {
+		padding:10px 0;
+	}
+	
+	div.title h1 {
+		font-size:30px;
+	}
+	
+	#index h2 {
+		font-size:30px;
+		margin-bottom:10px;
+	}
+	
+	#index h3 {
+		font-size:4.5vw;
+	}
+	
+	#index .concept img {
+		height:850px;
+	}
+	
+	#index .concept div.text {
+		width:80%;
+	}
+	
+	#index .voice li::before,
+	#index .voice li::after {
+		width:40%;
+	}
+	
+	#index .recruit .new,
+	#index .recruit .career {
+		width:100%;
+	}
+	
+	#profile h2 {
+		font-size:25px;
+	}
+	
+	#profile .section1 div {
+		display:block;
+	}
+	
+	#profile .section1 div dl {
+		width:100%;
+		margin:30px 0;
+		background-size:150px;
+	}
+	
+	#profile .section2 ul div {
+		width:100%;
+		margin:10px 0;
+	}
+	
+	#voice .employee li {
+		width:100%;
+		margin:0 0 50px;
+	}
+	
+	#voice .main div.name {
+		display:block;
+	}
+	
+	#voice .main div.name div {
+		padding:10px 20px;
+		width:100%;
+	}
+	
+	#voice .main div.name div:first-child span {
+		font-size:18px;
+	}
+	
+	#voice .content .section img {
+		width:100%;
+		max-width:360px;
+	}
+	
+	#voice .content h3 {
+		font-size:18px;
+	}
+	
+	#voice .content .section div {
+		width:100%;
+	}
+	
+	#voice .content .schedule .tablescroll {
+		overflow:auto;
+		white-space:nowrap;
+	}
+	
+	#voice .content .schedule tr {
+		font-size:14px;
+	}
+
+	#voice .content .schedule th {
+		padding:10px 10px 10px 0;
+	}
+	
+	#voice .content .schedule td {
+		padding:10px 0 10px 10px;
+	}
+	
+	#voice .content .schedule td br {
+		font-size:18px;
+	}
+	
+	#career th,
+	#career td {
+		display:block;
+		padding:10px 10px 20px;
+	}
+	
+	#career th {
+		border:none;
+		padding:20px 10px 0;
+	}
+	
+	#entry th,
+	#entry td {
+		display:block;
+		padding:0;
+	}
+	
+	#entry td {
+		margin-bottom:30px;
+		width:100%;
+	}
+	
+	#entry .barth td input {
+		margin:0 0.5em 0 0.5em;
+	}
+	
+	#entry .button {
+		flex-direction:column-reverse;
+	}
+	
+	#entry .button input,
+	#entry .button button {
+		width:200px;
+		margin:0 auto;
+	}
+	/*conf*/
+	#entry .mw_wp_form_confirm .button input {
+		margin:30px auto 0;
+	}
+	/*sent*/
+	#entry h2 {
+		margin-bottom:50px;
+		font-size:18px;
+	}
+	
+	
+	footer img.chara1 {
+		left:0;
+	}
+	
+	footer img.chara2 {
+		right:0;
+	}
+	
+	footer div img {
+		width:90%;
+	}
+	
+	
+}

@@ -1,0 +1,572 @@
+@charset "utf-8";
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,600;1,600&display=swap');
+/*--------------------------------------------------------------------------------------------------
+
+   common
+
+--------------------------------------------------------------------------------------------------*/
+
+
+/*reset-------------------------------------------------*/
+*, *:before, *:after {
+ -webkit-box-sizing: border-box;
+ -moz-box-sizing: border-box;
+ -o-box-sizing: border-box;
+ -ms-box-sizing: border-box;
+ box-sizing: border-box;
+}
+
+body,div,h1,h2,h3,h4,h5,h6,p,dl,dt,dd {
+	margin: 0;
+	padding: 0;
+}
+
+table {
+ border-collapse: collapse;
+	border-spacing: 0;
+}
+
+img {
+	border: none;
+	vertical-align: top;
+ -webkit-backface-visibility: hidden;
+}
+
+h1,h2,h3,h4,h5,h6 {
+	font-size: 100%;
+	font-weight: normal;
+}
+
+header,section,article,aside,footer,nav {
+ display: block;
+}
+
+/*-------------------------------------------------reset*/
+
+
+/*common-------------------------------------------------*/
+body {
+	margin: 0;
+	padding: 0;
+	color: #262626;
+	font-size: 16px;
+	font-family: 'Noto Sans JP', "ヒラギノ角ゴ ProN W3", "Hiragino Kaku Gothic ProN", "ＭＳ Ｐゴシック", "MS P Gothic", sans-serif;
+	line-height: 1.8;
+	overflow-x: hidden;
+}
+
+a:link {
+	color: #006699;
+}
+
+a:visited {
+	color: #993300;
+}
+
+a:hover, a:active {
+	color: #F26400;
+}
+
+.clear:after {
+ content: "";
+	display: block;
+	height: 0;
+	clear: both;
+	visibility: hidden;
+}
+
+.clear {
+ display: inline-table;
+ overflow: hidden;
+}
+
+/* mac \*/
+* html .clear {
+ height: 1%;
+}
+.clear {
+ display: block;
+}
+/* macend */
+
+.alignleft {
+	float: left;
+	margin: 0 10px 10px 0;
+}
+
+.alignright {
+	float: right;
+	margin: 0 0 10px 10px;
+}
+
+.aligncenter {
+	display: block;
+	margin: 0 auto;
+}
+
+.sp {
+	display: none;
+}
+
+.p404 {
+width: 90%;
+margin: 0 auto;
+padding: 100px 0;
+}
+
+/*-------------------------------------------------common*/
+
+
+/*------------------------------------------------------------------------------------------------
+  header
+--------------------------------------------------------------------------------------------------*/
+#header .inner {
+	width: 1000px;
+	margin: 0 auto;
+	display: flex;
+	justify-content: space-between;
+}
+
+#header .inner h1 {
+	padding: 30px 0 33px;
+	text-indent: -9999px;
+}
+
+#header .inner h1 a {
+	display: block;
+	background: url(../image/logo.png) no-repeat 0 0;
+	background-size: 260px;
+	width: 260px;
+	height: 27px;
+}
+
+#header .inner ul {
+	margin: 20px 0 0;
+	padding: 0;
+	list-style: none;
+	display: flex;
+	justify-content: flex-end;
+	align-items: center;
+}
+
+#header .inner ul li {
+	margin: 0 0 0 18px;
+	padding: 0;
+}
+
+#header .inner ul li a {
+	display: block;
+	text-decoration: none;
+	color: #262626;
+	font-size: 15px;
+	font-weight: 500;
+	transition: .3s;
+}
+
+#header .inner ul li a:hover {
+ transform: translateY(-2px);
+}
+
+#header .inner ul li:nth-child(7) a {
+	background-color: #1d56c5;
+	border-radius: 100vh;
+	color: #FFF;
+	width: 120px;
+	padding: 12px 0;
+	text-align: center;
+}
+
+#header .inner ul li:nth-child(8) {
+	margin: 0 0 0 10px;
+}
+
+#header .inner ul li:nth-child(8) a {
+	background-color: #d8190b;
+	border-radius: 100vh;
+	color: #FFF;
+	width: 120px;
+	padding: 12px 0;
+	text-align: center;
+}
+
+	
+/*------------------------------------------------------------------------------------------------
+  footer
+--------------------------------------------------------------------------------------------------*/
+#footer {
+	background-color: #d8190b;
+	padding: 60px 0;
+}
+
+footer {
+	display: flex;
+	width: 1000px;
+	margin: 0 auto;
+	color: #FFF;
+	justify-content: space-between;
+	font-size: 14px;
+}
+
+footer img.logo {
+	width: 259px;
+	height: 27px;
+	margin-bottom: 10px;
+}
+
+footer img.iso {
+	width: 180px;
+	height: auto;
+}
+
+footer div.info {
+	display: flex;
+}
+
+footer ul {
+	margin: 0 40px 0 0;
+	padding: 0;
+	list-style: none;
+}
+
+footer ul li {
+	margin: 0 0 0 30px;
+	padding: 0;
+}
+
+footer ul li a {
+	color: #FFF !important;
+	text-decoration: none;
+	font-size: 14px;
+}
+
+footer ul li a:hover {
+	text-decoration: underline;
+}
+
+
+/*------------------------------------------------------------------------------------------------
+  second
+--------------------------------------------------------------------------------------------------*/
+#second {
+	position: relative;
+}
+
+#second:before {
+	position: absolute;
+	width: 95%;
+	height: 365px;
+	content: "";
+	top: 0;
+	right: 0;
+	background: url(../image/second_title_back.png) no-repeat 0 0;
+	z-index: -1;
+}
+
+.secondTitle {
+	width: 1000px;
+	margin: 0 auto 120px;
+	position: relative;
+}
+
+.secondTitle01 {
+	width: 1000px;
+	margin: 0 auto 225px;
+	position: relative;
+}
+
+.secondTitle h2 {
+ color: #FFF;
+	font-family: 'Montserrat', sans-serif;
+	font-size: 55px;
+	font-style: italic;
+	padding: 100px 0 70px;
+	line-height: 1;
+	text-align: center;
+	letter-spacing: 0.04em;
+}
+
+.secondTitle h2 span {
+	margin: 16px 0 0;
+ font-size: 18px;
+	font-weight: 700;
+	display: block;
+	font-family: 'Noto Sans JP', "ヒラギノ角ゴ ProN W3", "Hiragino Kaku Gothic ProN", "ＭＳ Ｐゴシック", "MS P Gothic", sans-serif;
+	font-style: normal;
+}
+
+.secondTitle .pan {
+	position: absolute;
+	top: 16px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	display: flex;
+	z-index: 5;
+	color: #FFF;
+	font-size: 13px;
+}
+
+.secondTitle .pan li {
+	margin: 0;
+	padding: 0;
+}
+
+.secondTitle .pan li a {
+	text-decoration: none;
+	color: #FFF;
+}
+
+.secondTitle img {
+	border-radius: 30px;
+}
+
+#second .copy {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 5%;
+	height: 100%;
+}
+
+#second .copy p {
+ position: absolute;
+ top: 400px;
+ left: 50%;
+ transform: translate(0, -50%);
+ -webkit-transform: translate(0, -50%);
+ -ms-transform: translate(0, -50%);
+}
+
+#second h3.gradation span {
+	margin: 10px 0 0;
+ font-size: 18px;
+	font-weight: 700;
+	background: -webkit-linear-gradient(0deg, #1d56c5, #2d82eb);
+	display: block;
+	font-family: 'Noto Sans JP', "ヒラギノ角ゴ ProN W3", "Hiragino Kaku Gothic ProN", "ＭＳ Ｐゴシック", "MS P Gothic", sans-serif;
+	font-style: normal;
+	-webkit-background-clip: text;
+ -webkit-text-fill-color: transparent;
+}
+
+#second h3.gradation,
+#second h3.gradation span.en {
+	display: inline-block;
+ color: #2d82eb;
+ background: -webkit-linear-gradient(0deg, #44cee3, #2d82eb);
+ -webkit-background-clip: text;
+ -webkit-text-fill-color: transparent;
+	font-family: 'Montserrat', sans-serif;
+	font-size: 64px;
+	font-style: italic;
+	padding: 0 10px 0 0;
+	line-height: 1;
+}
+
+#second h3.gradation {
+	margin-bottom: 30px;
+}
+
+
+#second h3.white {
+	font-size: 64px;
+	font-style: italic;
+	line-height: 1;
+	margin: 0 0 50px;
+	font-family: 'Montserrat', sans-serif;
+	color: #FFF;
+}
+
+#second h3.white span {
+	margin: 10px 0 0;
+ font-size: 18px;
+	font-weight: 700;
+	display: block;
+	font-family: 'Noto Sans JP', "ヒラギノ角ゴ ProN W3", "Hiragino Kaku Gothic ProN", "ＭＳ Ｐゴシック", "MS P Gothic", sans-serif;
+	font-style: normal;
+}
+
+#second .blue-back,
+#second .red-back {
+	position: relative;
+}
+
+#second .blue-back:before {
+	position: absolute;
+	content: "";
+	top: 0;
+	left: 0;
+	background: url(../image/back-06.png) no-repeat 0 0;
+	background-size: cover;
+	width: 100%;
+	height: 500px;
+	z-index: -1;
+}
+
+#second .red-back:before {
+	position: absolute;
+	content: "";
+	top: 0;
+	left: 0;
+	background: url(../image/back-07.png) no-repeat 0 0;
+	background-size: cover;
+	width: 100%;
+	height: 500px;
+	z-index: -1;
+}
+
+#second p {
+	margin: 0 0 40px;
+}
+
+#second .btn {
+	text-align: center;
+}
+
+#second .btn a {
+	border: 1px solid #1d56c5;
+	color: #FFF;
+	display: inline-block;
+	width: 320px;
+	text-decoration: none;
+	border-radius: 100vh;
+	padding: 16px 0;
+	background: url(../image/arrow-01.png) #1d56c5 no-repeat 88% center;
+	background-size: 23px;
+}
+
+#second .btn a:hover {
+	background: url(../image/arrow-02.png) #FFF no-repeat 88% center;
+	background-size: 23px;
+	color: #1d56c5;
+}
+
+#second .tobira {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+}
+
+#second .tobira li {
+	margin: 0 0 40px;
+	padding: 0;
+	list-style: none;
+	width: 48%;
+	position: relative;
+}
+
+#second .tobira li a {
+	color: #000;
+	text-decoration: none;
+	opacity: 1;
+}
+
+#second .tobira li img {
+	width: 100%;
+	height: auto;
+	border-radius: 10px 10px 10px 0;
+}
+
+#second .tobira li a:hover img {
+	opacity: 0.7;
+}
+
+#second .tobira li h3 {
+	margin: -40px 0 0 0;
+	background-color: #FFF;
+	padding: 20px 20px 20px 30px;
+	position: relative;
+	z-index: 2;
+	box-shadow: 3px 3px 3px #EEE;
+	font-size: 22px;
+	font-weight: 700;
+	letter-spacing: 0.02em;
+	display: inline-block;
+	width: 80%;
+	border-radius: 10px;
+}
+
+#second .tobira li h3:before {
+	position: absolute;
+	top: 50%;
+	left: -10px;
+	content: "";
+	background-color: #d8190b;
+	width: 30px;
+	height: 2px;
+}
+
+#second .pager_wrap {
+	position: relative;
+	overflow: hidden;
+	margin: 20px auto 40px;
+	width: 1000px;
+}
+
+#second .pager_wrap ul.pager {
+	position: relative;
+	left: 50%;
+	float: left;
+	width: auto;
+}
+
+#second .pager_wrap ul.pager li {
+	position: relative;
+	left: -50%;
+	float: left;
+}
+
+#second .pager_wrap ul.pager {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+#second .pager_wrap ul.pager li {
+	display: inline;
+	/*min-width: 20px;*/
+	width: auto;
+	margin: 2px;
+	padding: 0;
+	background-color: #FFF;
+	text-align: center;
+	border: 1px solid #1d56c5;
+	text-indent: 0;
+}
+
+#second .pager_wrap ul.pager li a {
+	display: block;
+	padding: 10px 15px;
+	text-decoration: none;
+	border: none;
+}
+
+#second .pager_wrap ul.pager li::before {
+content: "";
+margin-right: 0;
+}
+#second .pager_wrap ul.pager li.active {
+	background-color: #1d56c5;
+	display: block;
+	padding: 10px 15px;
+	color: #FFFFFF;
+}
+
+#second .pager_wrap ul.pager li.active a:link, #second .pager_wrap ul.pager li.active a:visited,
+#second .pager_wrap ul.pager li.active a:hover, #second .pager_wrap ul.pager li.active a:active {
+	color: #FFFFFF !important;
+}
+
+#second .pager_wrap ul.pager li a:hover {
+	color: #FFF;
+	background-color: #1d56c5;
+}
+
+
+
+
+

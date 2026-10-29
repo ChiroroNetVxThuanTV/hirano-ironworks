@@ -1,0 +1,9 @@
+@charset "utf-8";
+
+#login h1 a {
+ display: block;
+ width: 260px;
+ height: 36px;
+ margin-bottom: 5px;
+ background: url(common/image/logo_login.gif) no-repeat center center;
+} 
